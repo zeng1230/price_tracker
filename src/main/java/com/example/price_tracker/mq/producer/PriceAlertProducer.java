@@ -1,10 +1,13 @@
 package com.example.price_tracker.mq.producer;
 
+import com.example.price_tracker.config.TraceIdFilter;
 import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -31,7 +34,15 @@ public class PriceAlertProducer {
             rabbitTemplate.convertAndSend(
                     RabbitMQConfig.PRICE_ALERT_EXCHANGE,
                     RabbitMQConfig.PRICE_ALERT_ROUTING_KEY,
-                    message
+                    message,
+                    rabbitMessage -> {
+                        String traceId = MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY);
+                        if (StringUtils.isNotBlank(traceId)) {
+                            rabbitMessage.getMessageProperties()
+                                    .setHeader(TraceIdFilter.TRACE_ID_HEADER, traceId);
+                        }
+                        return rabbitMessage;
+                    }
             );
             log.info(
                     "Published price alert message successfully, messageId={}, routingKey={}, watchlistId={}, productId={}, userId={}, productName={}, currentPrice={}",

@@ -1,5 +1,6 @@
 package com.example.price_tracker.mq.consumer;
 
+import com.example.price_tracker.config.TraceIdFilter;
 import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.redis.RedisCacheService;
@@ -8,7 +9,9 @@ import com.example.price_tracker.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -24,8 +27,26 @@ public class PriceAlertConsumer {
     @Value("${notification.consumer-idempotent.ttl-minutes:30}")
     private long consumerIdempotentTtlMinutes = 30;
 
-    @RabbitListener(queues = RabbitMQConfig.PRICE_ALERT_QUEUE)
     public void consume(PriceAlertMessage message) {
+        consume(message, null);
+    }
+
+    @RabbitListener(queues = RabbitMQConfig.PRICE_ALERT_QUEUE)
+    public void consume(PriceAlertMessage message,
+                        @Header(name = TraceIdFilter.TRACE_ID_HEADER, required = false) String traceId) {
+        if (traceId != null && !traceId.isBlank()) {
+            MDC.put(TraceIdFilter.TRACE_ID_MDC_KEY, traceId);
+        }
+        try {
+            consumeInternal(message);
+        } finally {
+            if (traceId != null && !traceId.isBlank()) {
+                MDC.remove(TraceIdFilter.TRACE_ID_MDC_KEY);
+            }
+        }
+    }
+
+    private void consumeInternal(PriceAlertMessage message) {
         log.info(
                 "Received price alert message from queue={}, messageId={}, watchlistId={}, productId={}, userId={}, currentPrice={}, targetPrice={}",
                 RabbitMQConfig.PRICE_ALERT_QUEUE,
