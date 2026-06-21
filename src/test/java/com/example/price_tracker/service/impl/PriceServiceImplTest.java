@@ -9,9 +9,11 @@ import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
+import com.example.price_tracker.provider.PriceProvider;
+import com.example.price_tracker.provider.PriceProviderRouter;
+import com.example.price_tracker.provider.PriceQuote;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
-import com.example.price_tracker.util.PriceMockUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatcher;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -33,6 +36,8 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class PriceServiceImplTest {
+
+    private static final LocalDateTime CAPTURED_AT = LocalDateTime.of(2026, 6, 21, 11, 0);
 
     @Mock
     private ProductMapper productMapper;
@@ -47,7 +52,10 @@ class PriceServiceImplTest {
     private PriceAlertProducer priceAlertProducer;
 
     @Mock
-    private PriceMockUtil priceMockUtil;
+    private PriceProviderRouter priceProviderRouter;
+
+    @Mock
+    private PriceProvider priceProvider;
 
     @Mock
     private RedisCacheService cacheService;
@@ -58,7 +66,7 @@ class PriceServiceImplTest {
     @Test
     void refreshProductPriceCreatesHistoryAndAlertMessageWhenTargetReached() {
         when(productMapper.selectById(1L)).thenReturn(activeProduct());
-        when(priceMockUtil.generateNextPrice(new BigDecimal("100.00"))).thenReturn(new BigDecimal("79.00"));
+        mockQuote("79.00", "CNY");
         when(watchlistMapper.selectList(any())).thenReturn(List.of(activeWatchlistWithoutDedupPrice()));
         when(cacheService.setIfAbsent(
                 RedisKeyManager.notificationIdempotentKey("99:1:80.00"),
@@ -68,7 +76,7 @@ class PriceServiceImplTest {
         priceService.refreshProductPrice(1L);
 
         verify(productMapper).updateById(argThat(updatedProduct()));
-        verify(priceHistoryMapper).insert(any(PriceHistory.class));
+        verify(priceHistoryMapper).insert(argThat(createdPriceHistory("79.00")));
         verify(priceAlertProducer).send(argThat(createdPriceAlertMessage()));
         verify(cacheService).delete(RedisKeyManager.productDetailKey(1L));
         verify(cacheService).delete(RedisKeyManager.productPriceKey(1L));
@@ -77,7 +85,7 @@ class PriceServiceImplTest {
     @Test
     void refreshProductPriceRecordsHistoryButDoesNotSendAlertWhenChangedPriceIsAboveTarget() {
         when(productMapper.selectById(1L)).thenReturn(activeProduct());
-        when(priceMockUtil.generateNextPrice(new BigDecimal("100.00"))).thenReturn(new BigDecimal("81.00"));
+        mockQuote("81.00", "USD");
         when(watchlistMapper.selectList(any())).thenReturn(List.of(activeWatchlistWithoutDedupPrice()));
 
         priceService.refreshProductPrice(1L);
@@ -93,7 +101,7 @@ class PriceServiceImplTest {
     @Test
     void refreshProductPriceSkipsDuplicateAlertWhenIdempotentKeyAlreadyExists() {
         when(productMapper.selectById(1L)).thenReturn(activeProduct());
-        when(priceMockUtil.generateNextPrice(new BigDecimal("100.00"))).thenReturn(new BigDecimal("79.00"));
+        mockQuote("79.00", "USD");
         when(watchlistMapper.selectList(any())).thenReturn(List.of(activeWatchlistWithoutDedupPrice()));
         when(cacheService.setIfAbsent(
                 RedisKeyManager.notificationIdempotentKey("99:1:80.00"),
@@ -124,7 +132,7 @@ class PriceServiceImplTest {
         when(productMapper.selectById(1L)).thenReturn(activeProduct(1L));
         when(productMapper.selectById(2L)).thenReturn(activeProduct(2L));
         when(productMapper.selectById(3L)).thenReturn(activeProduct(3L));
-        when(priceMockUtil.generateNextPrice(new BigDecimal("100.00"))).thenReturn(new BigDecimal("101.00"));
+        mockQuote("101.00", "USD");
         when(watchlistMapper.selectList(any())).thenReturn(List.of());
 
         priceService.refreshActiveProducts();
@@ -139,7 +147,7 @@ class PriceServiceImplTest {
         when(productMapper.selectPage(any(Page.class), any())).thenReturn(activeProductPage(activeProduct(1L), activeProduct(2L)));
         when(productMapper.selectById(1L)).thenThrow(new RuntimeException("refresh failed"));
         when(productMapper.selectById(2L)).thenReturn(activeProduct(2L));
-        when(priceMockUtil.generateNextPrice(new BigDecimal("100.00"))).thenReturn(new BigDecimal("101.00"));
+        mockQuote("101.00", "USD");
         when(watchlistMapper.selectList(any())).thenReturn(List.of());
 
         priceService.refreshActiveProducts();
@@ -162,7 +170,17 @@ class PriceServiceImplTest {
 
     private ArgumentMatcher<Product> updatedProduct() {
         return product -> new BigDecimal("79.00").compareTo(product.getCurrentPrice()) == 0
-                && product.getLastCheckedAt() != null;
+                && "CNY".equals(product.getCurrency())
+                && CAPTURED_AT.equals(product.getLastCheckedAt())
+                && CAPTURED_AT.equals(product.getUpdatedAt());
+    }
+
+    private ArgumentMatcher<PriceHistory> createdPriceHistory(String expectedPrice) {
+        return history -> history.getProductId().equals(1L)
+                && new BigDecimal("100.00").compareTo(history.getOldPrice()) == 0
+                && new BigDecimal(expectedPrice).compareTo(history.getNewPrice()) == 0
+                && "MOCK".equals(history.getSource())
+                && CAPTURED_AT.equals(history.getCapturedAt());
     }
 
     private ArgumentMatcher<PriceAlertMessage> createdPriceAlertMessage() {
@@ -174,7 +192,7 @@ class PriceServiceImplTest {
                 && "Laptop".equals(message.getProductName())
                 && new BigDecimal("79.00").compareTo(message.getCurrentPrice()) == 0
                 && new BigDecimal("80.00").compareTo(message.getTargetPrice()) == 0
-                && message.getTriggeredAt() != null;
+                && CAPTURED_AT.equals(message.getTriggeredAt());
     }
 
     private Product activeProduct() {
@@ -208,5 +226,16 @@ class PriceServiceImplTest {
         watchlist.setNotifyEnabled(1);
         watchlist.setStatus(1);
         return watchlist;
+    }
+
+    private void mockQuote(String price, String currency) {
+        when(priceProviderRouter.route(any(Product.class))).thenReturn(priceProvider);
+        when(priceProvider.fetchPrice(any(Product.class))).thenReturn(new PriceQuote(
+                new BigDecimal(price),
+                currency,
+                "MOCK",
+                CAPTURED_AT,
+                null,
+                "Laptop"));
     }
 }

@@ -3,6 +3,8 @@ package com.example.price_tracker.mq.producer;
 import com.example.price_tracker.config.TraceIdFilter;
 import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
+import com.example.price_tracker.redis.RedisCacheService;
+import com.example.price_tracker.redis.RedisKeyManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Component;
 public class PriceAlertProducer {
 
     private final RabbitTemplate rabbitTemplate;
+    private final RedisCacheService cacheService;
 
     public void send(PriceAlertMessage message) {
         log.info(
@@ -55,6 +58,7 @@ public class PriceAlertProducer {
                     message.getCurrentPrice()
             );
         } catch (Exception ex) {
+            cacheService.delete(buildProducerIdempotentKey(message));
             log.error(
                     "Failed to publish price alert message, messageId={}, routingKey={}, watchlistId={}, productId={}, userId={}, productName={}, currentPrice={}, targetPrice={}",
                     message.getMessageId(),
@@ -69,5 +73,10 @@ public class PriceAlertProducer {
             );
             throw ex;
         }
+    }
+
+    private String buildProducerIdempotentKey(PriceAlertMessage message) {
+        return RedisKeyManager.notificationIdempotentKey(
+                message.getUserId() + ":" + message.getProductId() + ":" + message.getTargetPrice());
     }
 }

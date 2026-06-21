@@ -92,8 +92,9 @@ public class PriceAlertConsumer {
                     message == null ? null : message.getUserId()
             );
         } catch (Exception ex) {
+            cacheService.delete(idempotentKey);
             log.error(
-                    "Notification send failed, key={}, messageId={}, watchlistId={}, productId={}, userId={}, decision=ack_keep_idempotent_key_until_ttl",
+                    "Notification send failed, key={}, messageId={}, watchlistId={}, productId={}, userId={}, decision=delete_idempotent_key_and_rethrow",
                     idempotentKey,
                     message == null ? null : message.getMessageId(),
                     message == null ? null : message.getWatchlistId(),
@@ -101,6 +102,7 @@ public class PriceAlertConsumer {
                     message == null ? null : message.getUserId(),
                     ex
             );
+            throw ex;
         }
     }
 

@@ -12,6 +12,7 @@ public enum ResultCode {
     NOT_FOUND(404, "not found"),
     TOO_MANY_REQUESTS(429, "too many requests"),
     VALIDATE_ERROR(422, "validation error"),
+    PRICE_PROVIDER_NOT_FOUND(1001, "price provider not found"),
     SYSTEM_ERROR(500, "system error");
 
     private final int code;

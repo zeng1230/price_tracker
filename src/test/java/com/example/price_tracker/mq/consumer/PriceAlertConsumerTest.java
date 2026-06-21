@@ -4,6 +4,8 @@ import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
 import com.example.price_tracker.service.NotificationService;
+import com.example.price_tracker.exception.BusinessException;
+import com.example.price_tracker.common.ResultCode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -63,12 +66,27 @@ class PriceAlertConsumerTest {
     }
 
     @Test
-    void consumeLogsErrorAndDoesNotRethrowWhenNotificationHandlingFails() {
+    void consumeDeletesIdempotentKeyAndRethrowsWhenNotificationHandlingFails() {
         PriceAlertMessage message = priceAlertMessage();
         when(cacheService.setIfAbsent(idempotentKey(), "1", Duration.ofMinutes(30))).thenReturn(true);
         doThrow(new IllegalStateException("boom")).when(notificationService).consumePriceAlert(message);
 
-        assertDoesNotThrow(() -> priceAlertConsumer.consume(message));
+        assertThrows(IllegalStateException.class, () -> priceAlertConsumer.consume(message));
+
+        verify(cacheService).delete(idempotentKey());
+    }
+
+    @Test
+    void consumeDeletesIdempotentKeyAndRethrowsWhenMessageIsInvalid() {
+        PriceAlertMessage message = priceAlertMessage();
+        message.setProductId(null);
+        when(cacheService.setIfAbsent(idempotentKey(), "1", Duration.ofMinutes(30))).thenReturn(true);
+        doThrow(new BusinessException(ResultCode.BAD_REQUEST, "invalid price alert message"))
+                .when(notificationService).consumePriceAlert(message);
+
+        assertThrows(BusinessException.class, () -> priceAlertConsumer.consume(message));
+
+        verify(cacheService).delete(idempotentKey());
     }
 
     private PriceAlertMessage priceAlertMessage() {

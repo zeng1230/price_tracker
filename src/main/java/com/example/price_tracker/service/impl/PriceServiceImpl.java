@@ -12,10 +12,12 @@ import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
+import com.example.price_tracker.provider.PriceProvider;
+import com.example.price_tracker.provider.PriceProviderRouter;
+import com.example.price_tracker.provider.PriceQuote;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
 import com.example.price_tracker.service.PriceService;
-import com.example.price_tracker.util.PriceMockUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,7 +37,6 @@ public class PriceServiceImpl implements PriceService {
 
     private static final int ACTIVE_STATUS = 1;
     private static final int NOTIFY_ENABLED = 1;
-    private static final String MOCK_SOURCE = "mock";
     private static final BigDecimal DEFAULT_PRICE = new BigDecimal("100.00");
     private static final int DEFAULT_BATCH_SIZE = 100;
     private static final int MAX_REFRESH_RETRIES = 2;
@@ -44,7 +45,7 @@ public class PriceServiceImpl implements PriceService {
     private final PriceHistoryMapper priceHistoryMapper;
     private final WatchlistMapper watchlistMapper;
     private final PriceAlertProducer priceAlertProducer;
-    private final PriceMockUtil priceMockUtil;
+    private final PriceProviderRouter priceProviderRouter;
     private final RedisCacheService cacheService;
 
     @Value("${notification.idempotent.ttl-minutes:10}")
@@ -62,24 +63,27 @@ public class PriceServiceImpl implements PriceService {
     private int refreshProductPriceInternal(Long productId) {
         Product product = getActiveProductOrThrow(productId);
         BigDecimal oldPrice = product.getCurrentPrice() == null ? DEFAULT_PRICE : product.getCurrentPrice();
-        BigDecimal newPrice = priceMockUtil.generateNextPrice(oldPrice);
-        LocalDateTime now = LocalDateTime.now();
-        product.setLastCheckedAt(now);
+        PriceProvider priceProvider = priceProviderRouter.route(product);
+        PriceQuote quote = priceProvider.fetchPrice(product);
+        BigDecimal newPrice = quote.price();
+        LocalDateTime capturedAt = quote.capturedAt();
+        product.setCurrency(quote.currency());
+        product.setLastCheckedAt(capturedAt);
         if (newPrice.compareTo(oldPrice) == 0) {
             productMapper.updateById(product);
             clearProductCache(productId);
             return 0;
         }
         product.setCurrentPrice(newPrice);
-        product.setUpdatedAt(now);
+        product.setUpdatedAt(capturedAt);
         productMapper.updateById(product);
         clearProductCache(productId);
         priceHistoryMapper.insert(PriceHistory.builder()
                 .productId(product.getId())
                 .oldPrice(oldPrice)
                 .newPrice(newPrice)
-                .capturedAt(now)
-                .source(MOCK_SOURCE)
+                .capturedAt(capturedAt)
+                .source(quote.source())
                 .build());
         int notificationTriggeredCount = 0;
         List<Watchlist> watchlists = watchlistMapper.selectList(new LambdaQueryWrapper<Watchlist>()
@@ -88,7 +92,7 @@ public class PriceServiceImpl implements PriceService {
                 .eq(Watchlist::getNotifyEnabled, NOTIFY_ENABLED));
         for (Watchlist watchlist : watchlists) {
             if (shouldNotify(watchlist, newPrice)) {
-                if (sendAlertIfNotDuplicate(product, watchlist, newPrice, now)) {
+                if (sendAlertIfNotDuplicate(product, watchlist, newPrice, capturedAt)) {
                     notificationTriggeredCount++;
                 }
             }
