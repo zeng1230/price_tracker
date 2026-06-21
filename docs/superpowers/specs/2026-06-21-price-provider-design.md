@@ -37,13 +37,13 @@ Provider code 和报价 source 均为 `MOCK`。该实现使用 `@Order(Ordered.L
 
 ### PriceProviderRouter
 
-Router 通过构造器注入全部 `PriceProvider`。初始化时先按 `providerCode` 字典序排序，再使用 Spring `AnnotationAwareOrderComparator` 做稳定的 order 排序。因此：
+Router 通过构造器注入全部 `PriceProvider`。初始化时使用一个明确 comparator：先按 order 升序，再按 `providerCode` 字典序升序。order 解析优先读取 `Ordered` 接口值，否则读取目标类上的 `@Order`，未声明时使用 `Ordered.LOWEST_PRECEDENCE`；读取目标类时兼容 Spring 代理。因此：
 
 1. 较小 order 的真实 Provider 优先。
 2. order 相同时按 `providerCode` 字典序选择。
 3. Mock Provider 始终处于最低优先级。
 
-路由时收集所有 `supports(product)` 的 Provider。无候选时抛出 `BusinessException(ResultCode.PRICE_PROVIDER_NOT_FOUND, ...)`，错误信息包含 `productId` 和 `platform`。有多个候选时记录候选 `providerCode` 列表；每次选择均记录最终 `providerCode`、`productId` 和 `platform`。
+路由时收集所有 `supports(product)` 的 Provider。单个 Provider 的 `supports` 抛出异常时，Router 记录包含 `providerCode`、`productId`、`platform` 和异常摘要的 warning，并跳过该 Provider。无候选时抛出 `BusinessException(ResultCode.PRICE_PROVIDER_NOT_FOUND, ...)`，错误信息包含 `productId` 和 `platform`。有多个候选时记录候选 `providerCode` 列表；每次选择均记录最终 `providerCode`、`productId` 和 `platform`。
 
 ## PriceServiceImpl 数据流
 
@@ -60,7 +60,7 @@ Router 通过构造器注入全部 `PriceProvider`。初始化时先按 `provide
 
 ## 错误处理
 
-新增 `PRICE_PROVIDER_NOT_FOUND` 业务错误码。Router 不静默回退、不伪造报价。当前 Mock Provider 在正常应用配置中提供兜底；单元测试通过不支持商品的 Provider 集合验证无候选异常。
+新增 `PRICE_PROVIDER_NOT_FOUND` 业务错误码。Router 不静默回退、不伪造报价。`MockPriceProvider` 当前支持所有非空商品，因此正常本地开发环境下一般不会出现该错误；它主要覆盖 Mock 被禁用、测试环境无候选 Provider、未来真实 Provider 严格匹配等场景。单元测试通过不支持商品的 Provider 集合验证无候选异常。
 
 未来真实 Provider 的超时、限流、无效数据和商品不存在应在适配层分类为明确异常，不能把失败转换成 Mock 报价。
 
@@ -68,7 +68,7 @@ Router 通过构造器注入全部 `PriceProvider`。初始化时先按 `provide
 
 - `PriceQuoteTest`：验证价格、币种、来源和采集时间的构造约束。
 - `MockPriceProviderTest`：验证支持商品、合法报价、默认 USD、`MOCK` source，且复用 `PriceMockUtil`。
-- `PriceProviderRouterTest`：验证 Mock 选择、无候选异常信息、较小 order 优先，以及同 order 时按 providerCode 稳定选择。
+- `PriceProviderRouterTest`：验证 Mock 选择、无候选异常信息、较小 order 优先、同 order 时按 providerCode 稳定选择，以及 `supports` 异常时跳过故障 Provider。
 - `PriceServiceImplTest`：将 `PriceMockUtil` mock 替换为 Router mock，验证 quote 驱动的商品更新、历史写入、MQ 通知、不满足目标价不通知、缓存失效和批量刷新重试行为。
 
 先写失败测试并确认失败原因，再实现最小生产代码，最后运行相关测试、完整测试和编译。
