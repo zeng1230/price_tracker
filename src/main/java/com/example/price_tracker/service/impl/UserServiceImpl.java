@@ -46,6 +46,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 .username(user.getUsername())
                 .email(user.getEmail())
                 .nickname(user.getNickname())
+                .role(user.getRole())
                 .status(user.getStatus())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())

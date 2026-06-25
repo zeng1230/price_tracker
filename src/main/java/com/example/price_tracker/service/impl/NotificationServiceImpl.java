@@ -28,8 +28,6 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery;
-
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -48,11 +46,9 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     public PageResult<NotificationVo> pageMyNotifications(NotificationQueryDto queryDto) {
         Long currentUserId = requireCurrentUserId();
-        Page<Notification> page = notificationMapper.selectPage(
+        Page<Notification> page = notificationMapper.selectPageByUserId(
                 new Page<>(queryDto.getPageNum(), queryDto.getPageSize()),
-                lambdaQuery(Notification.class)
-                        .eq(Notification::getUserId, currentUserId)
-                        .orderByDesc(Notification::getCreatedAt)
+                currentUserId
         );
         Map<Long, Product> productMap = buildProductMap(page.getRecords());
         List<NotificationVo> records = page.getRecords().stream()

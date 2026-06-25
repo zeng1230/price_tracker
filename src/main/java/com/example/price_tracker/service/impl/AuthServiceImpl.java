@@ -5,6 +5,7 @@ import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.dto.LoginDto;
 import com.example.price_tracker.dto.RegisterDto;
 import com.example.price_tracker.entity.User;
+import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.mapper.UserMapper;
 import com.example.price_tracker.service.AuthService;
@@ -41,6 +42,7 @@ public class AuthServiceImpl implements AuthService {
                 .password(passwordEncoder.encode(registerDto.getPassword()))
                 .email(normalize(registerDto.getEmail()))
                 .nickname(normalize(registerDto.getNickname()))
+                .role(UserRole.USER)
                 .status(1)
                 .build();
         userMapper.insert(user);
@@ -59,7 +61,7 @@ public class AuthServiceImpl implements AuthService {
         if (user.getStatus() == null || user.getStatus() != 1) {
             throw new BusinessException(ResultCode.FORBIDDEN, "user is disabled");
         }
-        String token = jwtTokenUtil.generateAccessToken(user.getId(), user.getUsername());
+        String token = jwtTokenUtil.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
         return LoginVo.builder().token(token).build();
     }
 

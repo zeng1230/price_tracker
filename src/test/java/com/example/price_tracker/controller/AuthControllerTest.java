@@ -3,6 +3,7 @@ package com.example.price_tracker.controller;
 import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.dto.LoginDto;
 import com.example.price_tracker.dto.RegisterDto;
+import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.service.AuthService;
 import com.example.price_tracker.vo.LoginVo;
 import com.example.price_tracker.vo.UserVo;
@@ -32,6 +33,7 @@ class AuthControllerTest {
                 .username("alice")
                 .email("alice@example.com")
                 .nickname("Alice")
+                .role(UserRole.USER)
                 .status(1)
                 .build();
         when(authService.register(any(RegisterDto.class))).thenReturn(userVo);
@@ -48,6 +50,7 @@ class AuthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.getCode()))
                 .andExpect(jsonPath("$.data.username").value("alice"))
+                .andExpect(jsonPath("$.data.role").value("USER"))
                 .andExpect(jsonPath("$.data.password").doesNotExist());
     }
 

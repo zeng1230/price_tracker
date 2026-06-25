@@ -1,6 +1,7 @@
 package com.example.price_tracker.util;
 
 import com.example.price_tracker.config.JwtProperties;
+import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.BusinessException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -28,12 +29,13 @@ public class JwtTokenUtil {
         return jwtProperties;
     }
 
-    public String generateAccessToken(Long userId, String username) {
+    public String generateAccessToken(Long userId, String username, UserRole role) {
         Instant now = Instant.now();
         return Jwts.builder()
                 .issuer(jwtProperties.getIssuer())
                 .subject(username)
                 .claim("userId", userId)
+                .claim("role", role.name())
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(jwtProperties.getAccessTokenExpireMinutes(), ChronoUnit.MINUTES)))
                 .signWith(secretKey())
@@ -51,7 +53,8 @@ public class JwtTokenUtil {
             if (userId == null) {
                 throw new BusinessException(UNAUTHORIZED, "token userId is missing");
             }
-            return new TokenPayload(userId, claims.getSubject());
+            UserRole role = UserRole.parse(claims.get("role", String.class));
+            return new TokenPayload(userId, claims.getSubject(), role);
         } catch (JwtException | IllegalArgumentException exception) {
             throw new BusinessException(UNAUTHORIZED, "invalid token");
         }
@@ -72,6 +75,6 @@ public class JwtTokenUtil {
         return Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
     }
 
-    public record TokenPayload(Long userId, String username) {
+    public record TokenPayload(Long userId, String username, UserRole role) {
     }
 }

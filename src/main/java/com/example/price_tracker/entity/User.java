@@ -29,6 +29,8 @@ public class User {
 
     private String nickname;
 
+    private UserRole role;
+
     private Integer status;
 
     @TableField("created_at")

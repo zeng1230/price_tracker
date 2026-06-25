@@ -28,6 +28,8 @@ public class ProductPageVo {
 
     private String imageUrl;
 
+    private Integer status;
+
     private LocalDateTime lastCheckedAt;
 
     private LocalDateTime updatedAt;
