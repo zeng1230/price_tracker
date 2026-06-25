@@ -1,5 +1,6 @@
 package com.example.price_tracker.controller;
 
+import com.example.price_tracker.annotation.AdminRequired;
 import com.example.price_tracker.common.PageResult;
 import com.example.price_tracker.common.Result;
 import com.example.price_tracker.dto.PriceHistoryQueryDto;
@@ -35,6 +36,7 @@ public class ProductController {
     private final PriceHistoryService priceHistoryService;
 
     @PostMapping
+    @AdminRequired
     public Result<Long> addProduct(@Valid @RequestBody ProductAddDto productAddDto) {
         return Result.success(productService.addProduct(productAddDto));
     }
@@ -58,6 +60,7 @@ public class ProductController {
     }
 
     @PutMapping("/{id}")
+    @AdminRequired
     public Result<Void> updateProduct(
             @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id,
             @Valid @RequestBody ProductUpdateDto productUpdateDto) {
@@ -66,6 +69,7 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}")
+    @AdminRequired
     public Result<Void> deleteProduct(@PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
         productService.deleteProduct(id);
         return Result.success();

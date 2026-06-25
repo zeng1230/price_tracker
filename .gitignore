@@ -34,6 +34,7 @@ tmp/
 Thumbs.db
 *.swp
 .env.local
+.env
 .env.*.local
 
 ### IntelliJ IDEA ###

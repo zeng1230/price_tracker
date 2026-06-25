@@ -1,7 +1,10 @@
 package com.example.price_tracker.service.impl;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.price_tracker.common.PageResult;
 import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.context.UserContext;
+import com.example.price_tracker.dto.NotificationQueryDto;
 import com.example.price_tracker.entity.Notification;
 import com.example.price_tracker.entity.Watchlist;
 import com.example.price_tracker.exception.BusinessException;
@@ -61,6 +64,21 @@ class NotificationServiceImplTest {
 
         assertEquals(ResultCode.NOT_FOUND.getCode(), exception.getCode());
         assertEquals("notification not found", exception.getMessage());
+    }
+
+    @Test
+    void pageNotificationsFiltersByCurrentUser() {
+        Page<Notification> page = new Page<>(1, 10);
+        page.setRecords(java.util.List.of());
+        page.setTotal(0);
+        when(notificationMapper.selectPageByUserId(any(Page.class), org.mockito.ArgumentMatchers.eq(99L)))
+                .thenReturn(page);
+
+        NotificationQueryDto query = new NotificationQueryDto();
+        PageResult<?> result = notificationService.pageMyNotifications(query);
+
+        assertEquals(0, result.getTotal());
+        verify(notificationMapper).selectPageByUserId(any(Page.class), org.mockito.ArgumentMatchers.eq(99L));
     }
 
     @Test

@@ -1,6 +1,6 @@
 # Price Tracker
 
-Price Tracker 是一个基于 Spring Boot 3 的商品价格跟踪后端。用户可以注册、登录、创建商品、关注商品并设置目标价；系统当前通过 `MockPriceProvider` 刷新模拟价格，记录价格历史，并在价格达到目标时经 RabbitMQ 异步生成站内通知。
+Price Tracker 是一个基于 Spring Boot 3 的商品价格跟踪后端。管理员维护商品并触发手动价格刷新，普通用户关注商品并设置目标价；系统当前通过 `MockPriceProvider` 刷新模拟价格，记录价格历史，并在价格达到目标时经 RabbitMQ 异步生成站内通知。
 
 项目包名为 `com.example.price_tracker`。当前形态是单体 REST API 项目，重点展示 MySQL 持久化、Redis 缓存与协调、RabbitMQ 异步通知、JWT 鉴权、TraceId 和可验收交付能力。
 
@@ -20,13 +20,46 @@ Price Tracker 是一个基于 Spring Boot 3 的商品价格跟踪后端。用户
 ## 核心业务链路
 
 ```text
-注册/登录 -> JWT -> 创建商品 -> 添加关注并设置目标价
--> 手动或定时刷新 MockPriceProvider 价格 -> 更新商品并写入价格历史
+ADMIN 登录 -> 创建或管理商品
+USER 登录 -> 添加关注并设置目标价
+-> ADMIN 手动刷新或定时任务刷新 MockPriceProvider 价格 -> 更新商品并写入价格历史
 -> 当前价 <= 目标价 -> Producer 幂等判断 -> RabbitMQ
--> Consumer 重试、幂等和业务校验 -> 写入站内通知 -> 查询/标记已读
+-> Consumer 重试、幂等和业务校验 -> 写入站内通知 -> USER 查询/标记已读
 ```
 
-定时任务默认每 30 分钟扫描有效商品，分页大小默认为 100；单商品刷新失败最多额外重试 2 次，并与其他商品隔离。手动验收使用 `POST /api/internal/products/{id}/refresh-price`。
+定时任务默认每 30 分钟扫描有效商品，分页大小默认为 100；单商品刷新失败最多额外重试 2 次，并与其他商品隔离。推荐的管理员手动刷新入口是 `POST /api/admin/products/{productId}/refresh-price`。旧的 `POST /api/internal/products/{id}/refresh-price` 保留用于内部验收，但同样要求 ADMIN 角色。
+
+## 用户角色与权限
+
+当前只支持两类角色，数据库和 JWT 中统一使用大写值：
+
+| 角色 | 能力 |
+| --- | --- |
+| `USER` | 查询商品和价格历史；新增、查询、修改、取消自己的关注；查询和标记自己的通知 |
+| `ADMIN` | 包含普通查询能力，并可查询用户、管理商品、调整商品状态和手动刷新价格 |
+
+普通注册固定创建 `USER`，注册请求不接受 `role`。项目不提供公开管理员注册接口。管理员初始化采用低侵入方式：
+
+```powershell
+# 先调用 POST /api/auth/register 注册 admin，再执行：
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker `
+  -e "UPDATE tb_user SET role='ADMIN' WHERE username='admin';"
+```
+
+角色变更后必须重新登录。升级前签发的旧 token 不含 `role` claim，会按无效 token 返回 `UNAUTHORIZED`；升级后所有用户都需要重新登录获取新 token。非法角色不会静默降级为 `USER`。
+
+管理员接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/admin/users` | 分页查询用户及状态 |
+| GET | `/api/admin/products` | 分页查询全部商品，包括停用商品 |
+| PUT | `/api/admin/products/{productId}/status` | 使用 `{"status":0}` 或 `{"status":1}` 停用/启用商品 |
+| POST | `/api/admin/products/{productId}/refresh-price` | 复用现有 PriceService/PriceProvider 链路刷新价格 |
+
+现有 `POST /api/products`、`PUT /api/products/{id}`、`DELETE /api/products/{id}` 也仅允许 ADMIN。未登录或 token 无效返回 `UNAUTHORIZED`；已登录 USER 访问管理员能力返回 `FORBIDDEN`。响应继续使用统一 `Result` 结构。
+
+本轮没有用户状态更新接口，因此不存在管理员禁用自己的入口；若未来新增该接口，必须禁止当前管理员禁用自己。当前没有角色表、权限表、菜单权限、复杂 RBAC 或后台前端。
 
 ## 系统架构
 
@@ -56,13 +89,23 @@ HTTP Client
 
 | 表 | 作用 | 关键字段或约束 |
 | --- | --- | --- |
-| `tb_user` | 用户与登录身份 | `username` 唯一，密码存 BCrypt 摘要 |
+| `tb_user` | 用户与登录身份 | `username` 唯一，密码存 BCrypt 摘要，`role` 仅允许应用写入 `USER/ADMIN` |
 | `tb_product` | 商品主数据与当前价格 | `current_price`、`last_checked_at`、`status` |
 | `tb_price_history` | 每次有效价格变化 | `old_price`、`new_price`、`captured_at`、`source=MOCK` |
 | `tb_watchlist` | 用户关注、目标价与通知开关 | `(user_id, product_id)` 唯一，`last_notified_price` 业务防重 |
 | `tb_notification` | 站内通知 | `is_read`、`send_status`、`sent_at`；当前无通知唯一约束 |
 
-建表文件位于 `src/main/resources/sql/`。Docker 仅在首次创建 MySQL volume 时自动执行这些 SQL；项目当前未引入 Flyway。
+建表文件位于 `src/main/resources/sql/`。Docker Compose 实际挂载其中的 `tb_user.sql`，新数据库会直接创建 `role VARCHAR(20) NOT NULL DEFAULT 'USER'`。Docker 仅在首次创建 MySQL volume 时自动执行这些 SQL；项目当前未引入 Flyway。
+
+已有数据库不会自动增加字段。升级旧 volume 时，确认 `tb_user` 尚无 `role` 后手工执行：
+
+```sql
+ALTER TABLE tb_user
+    ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'USER' AFTER nickname,
+    ADD CONSTRAINT chk_tb_user_role CHECK (role IN ('USER', 'ADMIN'));
+```
+
+随后按需将管理员账号更新为 `ADMIN`，并让所有用户重新登录。
 
 ## Redis 使用点
 
@@ -149,7 +192,7 @@ Linux/macOS：
 - 当前 RabbitMQ 已有监听器重试、DLX/DLQ、Producer/Consumer Redis 幂等和 `last_notified_price` 业务防重，但这些机制都是有 TTL 或有失败窗口的，不保证 exactly-once；系统语义应按至少一次投递下的尽力去重理解。
 - 当前没有配置 publisher confirm/return，Producer 的“发送成功”日志只表示客户端调用未抛异常，不等价于 Broker 已持久化并可消费。
 - 当前不是微服务项目，而是单体后端；没有服务注册发现、网关、配置中心或分布式事务。
-- 当前没有前端、管理员接口和生产级权限模型。
+- 当前有最小 `USER/ADMIN` 角色边界和少量管理员接口，但没有复杂 RBAC、菜单权限或后台前端。
 - 当前使用手工 SQL 初始化，没有 Flyway；Docker 初始化脚本只在空 volume 首次启动时执行。
 
 ## 文档

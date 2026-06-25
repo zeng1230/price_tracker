@@ -6,6 +6,7 @@ import com.example.price_tracker.dto.WatchlistAddDto;
 import com.example.price_tracker.dto.WatchlistQueryDto;
 import com.example.price_tracker.entity.Product;
 import com.example.price_tracker.entity.Watchlist;
+import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.redis.RedisCacheService;
@@ -24,6 +25,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -90,6 +92,36 @@ class WatchlistServiceImplTest {
         verify(watchlistMapper, never()).insert(any(Watchlist.class));
         verify(watchlistMapper, never()).updateById(any(Watchlist.class));
         verify(cacheService, never()).delete(anyString());
+    }
+
+    @Test
+    void updateWatchlistRejectsAnotherUsersRecord() {
+        Watchlist watchlist = existingActiveWatchlist();
+        watchlist.setUserId(77L);
+        when(watchlistMapper.selectById(11L)).thenReturn(watchlist);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> watchlistService.updateWatchlist(11L, new com.example.price_tracker.dto.WatchlistUpdateDto())
+        );
+
+        assertEquals(404, exception.getCode());
+        verify(watchlistMapper, never()).updateById(any(Watchlist.class));
+    }
+
+    @Test
+    void deleteWatchlistRejectsAnotherUsersRecord() {
+        Watchlist watchlist = existingActiveWatchlist();
+        watchlist.setUserId(77L);
+        when(watchlistMapper.selectById(11L)).thenReturn(watchlist);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> watchlistService.deleteWatchlist(11L)
+        );
+
+        assertEquals(404, exception.getCode());
+        verify(watchlistMapper, never()).updateById(any(Watchlist.class));
     }
 
     private ArgumentMatcher<Watchlist> reactivatedWatchlist() {
