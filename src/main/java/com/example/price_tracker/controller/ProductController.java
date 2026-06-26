@@ -9,6 +9,7 @@ import com.example.price_tracker.dto.ProductUpdateDto;
 import com.example.price_tracker.service.PriceHistoryService;
 import com.example.price_tracker.service.ProductService;
 import com.example.price_tracker.vo.PriceHistoryVo;
+import com.example.price_tracker.vo.PriceTrendVo;
 import com.example.price_tracker.vo.ProductDetailVo;
 import com.example.price_tracker.vo.ProductPageVo;
 import com.example.price_tracker.vo.ProductPriceVo;
@@ -80,5 +81,11 @@ public class ProductController {
             @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId,
             @Valid PriceHistoryQueryDto queryDto) {
         return Result.success(priceHistoryService.pageByProductId(productId, queryDto));
+    }
+
+    @GetMapping("/{id}/price-trend")
+    public Result<PriceTrendVo> priceTrend(
+            @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId) {
+        return Result.success(priceHistoryService.getPriceTrend(productId));
     }
 }
