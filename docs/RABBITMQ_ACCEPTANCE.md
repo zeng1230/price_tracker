@@ -154,3 +154,42 @@ HTTP 响应 header 也应返回同一 `X-Trace-Id`。没有传入 header 时 `Tr
 - 当前没有事务外盒或本地消息表。商品/历史写库与 MQ 发布不在同一原子事务中，存在“数据库已提交但消息未可靠送达”和“消息已发但外层事务回滚”的窗口。
 - Redis 幂等都有 TTL，Redis 数据丢失、TTL 到期以及业务处理与 ACK 之间的崩溃窗口仍可能产生重复或遗漏。
 - 因此当前不保证 exactly-once；应按至少一次投递环境中的尽力去重理解，并通过 DLQ 人工处置最终失败消息。
+## P1 Publisher Confirm/Return Acceptance
+
+Current publisher settings:
+
+```yaml
+spring.rabbitmq.publisher-confirm-type: correlated
+spring.rabbitmq.publisher-returns: true
+spring.rabbitmq.template.mandatory: true
+```
+
+Producer behavior:
+
+- `convertAndSend(...)` returning normally only means the client call did not throw synchronously.
+- Publisher confirm `ack=true` means RabbitMQ accepted the message at the exchange. It does not prove routing to `price.alert.queue`.
+- Publisher return means the message reached an exchange but could not be routed to a queue. This is a business delivery failure.
+- If the same message gets publisher return and then confirm ack, the return result wins for business semantics.
+- Synchronous publish exception, confirm nack, and publisher return delete the Producer Redis idempotency key. This permits a later price refresh to send again; it does not replay the current message.
+
+Suggested checks:
+
+1. Normal publish: trigger a valid price alert and verify logs contain `Publisher confirm ack`.
+2. Unroutable publish: temporarily publish with a bad routing key in a test or controlled local change and verify `Publisher return` appears and the Producer Redis idempotency key is deleted.
+3. Broker/exchange failure: if reproducible in a local test, verify confirm nack or synchronous exception logs include `decision=delete_producer_idempotent_key`.
+
+## P1 eventKey idempotency
+
+New messages must contain a non-empty `eventKey`:
+
+```text
+TARGET_PRICE_REACHED:userId:productId:watchlistId:targetPrice:currentPrice:triggeredAtEpochMillis
+```
+
+Money values are normalized to scale 2 with `HALF_UP`; time is normalized to UTC epoch milliseconds.
+`tb_notification.event_key` is nullable only for legacy rows. New rows must write a non-empty value.
+`ux_notification_event_key` provides long-term idempotency for notification persistence. Redis producer
+and consumer keys remain TTL-based fast duplicate suppression.
+
+Retry and DLQ boundaries remain unchanged: they only cover messages that reached the main queue and then
+failed in the listener. The system still has no transactional outbox and does not guarantee exactly-once.

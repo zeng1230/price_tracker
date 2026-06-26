@@ -117,7 +117,7 @@ docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT i
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,current_price,last_checked_at,status FROM tb_product WHERE id=$productId;"
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,old_price,new_price,source,captured_at FROM tb_price_history WHERE product_id=$productId ORDER BY id DESC;"
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,user_id,product_id,target_price,notify_enabled,last_notified_price,status FROM tb_watchlist WHERE id=$watchlistId;"
-docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,user_id,product_id,is_read,send_status,sent_at FROM tb_notification WHERE id=$notificationId;"
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,user_id,product_id,event_key,is_read,send_status,sent_at FROM tb_notification WHERE id=$notificationId;"
 ```
 
 预期商品有效、历史 `source=MOCK`、关注开启、`last_notified_price` 已更新，通知 `is_read=1`、`send_status=1`。
@@ -241,3 +241,19 @@ WHERE product_id = 1;
 ```
 
 预期查询以 `product_id` 为过滤条件使用 `idx_price_history_product_captured_at`。如果运行环境不支持 `EXPLAIN ANALYZE`，改用 `EXPLAIN` 并在验收报告中注明降级。
+## P1 manual SQL upgrade for existing MySQL volumes
+
+Docker only runs `src/main/resources/sql/*.sql` when a MySQL volume is first created.
+For an existing local volume, apply this manual upgrade once:
+
+```sql
+ALTER TABLE tb_notification
+    ADD COLUMN event_key varchar(191) NULL COMMENT 'notification business event key' AFTER watchlist_id;
+
+CREATE UNIQUE INDEX ux_notification_event_key
+    ON tb_notification (event_key)
+    COMMENT 'Deduplicate notification business events while allowing legacy NULL values';
+```
+
+`event_key` stays nullable so legacy rows do not need backfill. New application messages validate
+`PriceAlertMessage.eventKey` and write a non-empty `Notification.eventKey`.

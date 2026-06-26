@@ -17,6 +17,8 @@ import com.example.price_tracker.service.NotificationService;
 import com.example.price_tracker.vo.NotificationVo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -75,6 +77,17 @@ public class NotificationServiceImpl implements NotificationService {
     @Transactional
     public void consumePriceAlert(PriceAlertMessage message) {
         validatePriceAlertMessage(message);
+        Notification existingNotification = notificationMapper.selectByEventKey(message.getEventKey());
+        if (existingNotification != null) {
+            log.info(
+                    "Skip duplicate price alert notification by eventKey, eventKey={}, messageId={}, productId={}, userId={}",
+                    message.getEventKey(),
+                    message.getMessageId(),
+                    message.getProductId(),
+                    message.getUserId()
+            );
+            return;
+        }
         Watchlist watchlist = watchlistMapper.selectById(message.getWatchlistId());
         if (!isWatchlistEligible(watchlist, message)) {
             log.info(
@@ -92,7 +105,21 @@ public class NotificationServiceImpl implements NotificationService {
             return;
         }
         LocalDateTime now = resolveTriggeredAt(message.getTriggeredAt());
-        notificationMapper.insert(buildNotification(message, now));
+        try {
+            notificationMapper.insert(buildNotification(message, now));
+        } catch (DuplicateKeyException exception) {
+            if (isEventKeyDuplicate(exception)) {
+                log.info(
+                        "Skip duplicate price alert notification after eventKey unique conflict, eventKey={}, messageId={}, productId={}, userId={}",
+                        message.getEventKey(),
+                        message.getMessageId(),
+                        message.getProductId(),
+                        message.getUserId()
+                );
+                return;
+            }
+            throw exception;
+        }
         watchlist.setLastNotifiedPrice(message.getCurrentPrice());
         watchlist.setUpdatedAt(now);
         watchlistMapper.updateById(watchlist);
@@ -141,6 +168,7 @@ public class NotificationServiceImpl implements NotificationService {
                 || message.getUserId() == null
                 || message.getProductId() == null
                 || message.getWatchlistId() == null
+                || StringUtils.isBlank(message.getEventKey())
                 || message.getCurrentPrice() == null
                 || message.getTargetPrice() == null) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "invalid price alert message");
@@ -169,6 +197,7 @@ public class NotificationServiceImpl implements NotificationService {
                 .userId(message.getUserId())
                 .productId(message.getProductId())
                 .watchlistId(message.getWatchlistId())
+                .eventKey(message.getEventKey())
                 .notifyType(TARGET_PRICE_REACHED)
                 .content(message.getProductName() + " current price " + message.getCurrentPrice()
                         + " reached target " + message.getTargetPrice())
@@ -177,5 +206,11 @@ public class NotificationServiceImpl implements NotificationService {
                 .createdAt(now)
                 .sentAt(now)
                 .build();
+    }
+
+    private boolean isEventKeyDuplicate(DuplicateKeyException exception) {
+        String message = exception.getMessage();
+        return message != null
+                && (message.contains("ux_notification_event_key") || message.contains("event_key"));
     }
 }

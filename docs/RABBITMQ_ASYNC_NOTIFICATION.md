@@ -128,3 +128,13 @@ Created price alert notification, watchlistId=5, productId=1, userId=99
 - producer 侧和 consumer 侧 Redis 幂等可以减少重复处理，但 `tb_notification` 目前没有数据库级唯一约束。
 - `last_notified_price` 只防止同一价格重复通知，不覆盖所有语义重复场景。
 - `Jackson2JsonMessageConverter` 负责消息序列化，消息 schema 目前没有版本号。
+## P1 current reliability status
+
+The previous limitation about `tb_notification` having no database-level uniqueness is superseded.
+`tb_notification.event_key` is now nullable for legacy rows, and `ux_notification_event_key`
+deduplicates new notification business events.
+
+Publisher confirm/return is enabled for the price alert publisher. Confirm ack only proves exchange
+acceptance; publisher return means unroutable and is treated as delivery failure. Redis idempotency
+still has TTL and remains a fast duplicate suppression layer, not a long-term business uniqueness
+guarantee. The system still has no transactional outbox and no exactly-once guarantee.

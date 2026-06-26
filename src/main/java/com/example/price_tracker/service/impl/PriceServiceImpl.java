@@ -10,6 +10,7 @@ import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.mapper.PriceHistoryMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
+import com.example.price_tracker.mq.message.PriceAlertEventKeyBuilder;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.example.price_tracker.provider.PriceProvider;
@@ -170,6 +171,13 @@ public class PriceServiceImpl implements PriceService {
     private PriceAlertMessage buildPriceAlertMessage(Product product, Watchlist watchlist, BigDecimal newPrice, LocalDateTime now) {
         return PriceAlertMessage.builder()
                 .messageId(buildMessageId(product.getId(), watchlist.getId()))
+                .eventKey(PriceAlertEventKeyBuilder.buildTargetPriceReachedKey(
+                        watchlist.getUserId(),
+                        product.getId(),
+                        watchlist.getId(),
+                        watchlist.getTargetPrice(),
+                        newPrice,
+                        now))
                 .userId(watchlist.getUserId())
                 .productId(product.getId())
                 .watchlistId(watchlist.getId())

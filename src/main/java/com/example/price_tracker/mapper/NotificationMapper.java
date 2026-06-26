@@ -12,10 +12,19 @@ public interface NotificationMapper extends BaseMapper<Notification> {
 
     @Select("""
             SELECT id, user_id, product_id, watchlist_id, notify_type, content,
-                   is_read, send_status, created_at, sent_at
+                   event_key, is_read, send_status, created_at, sent_at
             FROM tb_notification
             WHERE user_id = #{userId}
             ORDER BY created_at DESC, id DESC
             """)
     Page<Notification> selectPageByUserId(Page<Notification> page, @Param("userId") Long userId);
+
+    @Select("""
+            SELECT id, user_id, product_id, watchlist_id, notify_type, content,
+                   event_key, is_read, send_status, created_at, sent_at
+            FROM tb_notification
+            WHERE event_key = #{eventKey}
+            LIMIT 1
+            """)
+    Notification selectByEventKey(@Param("eventKey") String eventKey);
 }

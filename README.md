@@ -93,7 +93,7 @@ HTTP Client
 | `tb_product` | 商品主数据与当前价格 | `current_price`、`last_checked_at`、`status` |
 | `tb_price_history` | 每次有效价格变化 | `old_price`、`new_price`、`captured_at`、`source=MOCK` |
 | `tb_watchlist` | 用户关注、目标价与通知开关 | `(user_id, product_id)` 唯一，`last_notified_price` 业务防重 |
-| `tb_notification` | 站内通知 | `is_read`、`send_status`、`sent_at`；当前无通知唯一约束 |
+| `tb_notification` | 站内通知 | `event_key` 业务唯一键、`is_read`、`send_status`、`sent_at` |
 
 建表文件位于 `src/main/resources/sql/`。Docker Compose 实际挂载其中的 `tb_user.sql`，新数据库会直接创建 `role VARCHAR(20) NOT NULL DEFAULT 'USER'`。Docker 仅在首次创建 MySQL volume 时自动执行这些 SQL；项目当前未引入 Flyway。
 
@@ -190,7 +190,7 @@ Linux/macOS：
 - 当前通知方式只包含站内通知落库与已读状态；邮件、短信、Webhook 和 Push 当前未实现。
 - 当前没有事务外盒（Transactional Outbox）、本地消息表或数据库与 MQ 的原子提交；数据库事务成功但发送失败、或发送成功后数据库事务回滚时，存在一致性窗口。
 - 当前 RabbitMQ 已有监听器重试、DLX/DLQ、Producer/Consumer Redis 幂等和 `last_notified_price` 业务防重，但这些机制都是有 TTL 或有失败窗口的，不保证 exactly-once；系统语义应按至少一次投递下的尽力去重理解。
-- 当前没有配置 publisher confirm/return，Producer 的“发送成功”日志只表示客户端调用未抛异常，不等价于 Broker 已持久化并可消费。
+- 当前已配置 publisher confirm/return；confirm ack 只表示 exchange 接收，return 表示不可路由且按发送失败处理，仍不等价于 exactly-once。
 - 当前不是微服务项目，而是单体后端；没有服务注册发现、网关、配置中心或分布式事务。
 - 当前有最小 `USER/ADMIN` 角色边界和少量管理员接口，但没有复杂 RBAC、菜单权限或后台前端。
 - 当前使用手工 SQL 初始化，没有 Flyway；Docker 初始化脚本只在空 volume 首次启动时执行。
@@ -218,3 +218,36 @@ GET /api/products/{productId}/price-trend
 - 上述指标是变动样本近似统计，不是按价格持续时间加权的价格状态计算。
 
 趋势结果当前直接由 MySQL 聚合，不使用 Redis 缓存，也没有新增表或索引。现有 `idx_price_history_product_captured_at(product_id, captured_at)` 同时支持价格历史分页、时间窗口筛选和首末历史定位。
+
+## P1 RabbitMQ Reliability Update
+
+The price alert publisher now enables publisher confirm and publisher return:
+
+- `spring.rabbitmq.publisher-confirm-type=correlated`
+- `spring.rabbitmq.publisher-returns=true`
+- `spring.rabbitmq.template.mandatory=true`
+
+Publisher confirm ack only means the exchange accepted the message. It does not prove
+that the message was routed to `price.alert.queue`. Publisher return means the message
+was unroutable and is treated as a business delivery failure even if a later confirm
+ack arrives for the same publish operation.
+
+On synchronous publish exceptions, confirm nack, or publisher return, the Producer
+deletes the Redis producer idempotency key. This only allows a later price refresh to
+publish again; it does not automatically replay the current message.
+
+New `PriceAlertMessage` instances carry a non-empty `eventKey`:
+
+```text
+TARGET_PRICE_REACHED:userId:productId:watchlistId:targetPrice:currentPrice:triggeredAtEpochMillis
+```
+
+`targetPrice` and `currentPrice` are normalized with `setScale(2, HALF_UP).toPlainString()`.
+`triggeredAt` is normalized to UTC epoch milliseconds. `tb_notification.event_key`
+is nullable for legacy rows, but new notifications must write a non-empty event key.
+The unique index `ux_notification_event_key` provides long-term business idempotency;
+the existing Redis keys remain fast TTL-based duplicate suppression.
+
+This project still has no transactional outbox, no `mq_message_log`, and no
+exactly-once guarantee. Retry and DLQ only cover messages that reached the main queue
+and then failed during consumption.

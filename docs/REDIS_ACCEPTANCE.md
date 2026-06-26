@@ -136,3 +136,10 @@ docker exec price-tracker-redis redis-cli TTL "price-tracker:idempotent:notify:m
 - TTL 为动态值，检查范围而不是固定秒数。
 - 缓存 key 应在读后出现、写后删除；锁应短暂出现并最终释放。
 - Redis 不可用会影响缓存、锁、限流和消息幂等，当前未实现统一降级策略。
+## P1 MQ publisher reliability note
+
+Producer Redis idempotency still has TTL and is not a durable send log. P1 adds publisher
+confirm and publisher return handling: synchronous publish exceptions, confirm nack, and
+publisher return delete the Producer idempotency key so a later refresh can send again.
+Confirm ack only means exchange acceptance; return means unroutable and wins over a later
+confirm ack for business delivery semantics. This is still not an outbox and not exactly-once.
