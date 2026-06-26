@@ -92,6 +92,7 @@ class PriceAlertConsumerTest {
     private PriceAlertMessage priceAlertMessage() {
         return PriceAlertMessage.builder()
                 .messageId("msg-001")
+                .eventKey("TARGET_PRICE_REACHED:99:1:5:80.00:79.00:1782468930000")
                 .userId(99L)
                 .productId(1L)
                 .watchlistId(5L)

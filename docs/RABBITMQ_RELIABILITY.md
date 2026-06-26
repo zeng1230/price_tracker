@@ -113,10 +113,14 @@ existing messages, delete the old queue, and let the application declare it agai
 
 ## 6. Current Boundaries
 
-This P0 change does not implement:
+P1 update: publisher confirm and publisher return are now implemented for the
+price alert publisher. Confirm ack only means the exchange accepted the message.
+Publisher return means the message was unroutable, and return wins over a later
+confirm ack for business delivery semantics.
+
+This reliability boundary still does not implement:
 
 - transactional outbox
-- publisher confirm or return callbacks
 - `mq_message_log`
 - RabbitMQ transactional messages
 - delayed retry queues

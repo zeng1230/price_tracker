@@ -20,6 +20,7 @@ import org.mockito.ArgumentMatcher;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.math.BigDecimal;
 
@@ -83,6 +84,7 @@ class NotificationServiceImplTest {
 
     @Test
     void consumePriceAlertCreatesNotificationAndUpdatesWatchlistWhenNotDuplicate() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
         when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithoutDedupPrice());
 
         notificationService.consumePriceAlert(triggeredMessage());
@@ -93,6 +95,7 @@ class NotificationServiceImplTest {
 
     @Test
     void consumePriceAlertSkipsDuplicatePriceNotification() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
         when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithDedupPrice());
 
         notificationService.consumePriceAlert(triggeredMessage());
@@ -103,12 +106,57 @@ class NotificationServiceImplTest {
 
     @Test
     void consumePriceAlertSkipsNotificationWhenCurrentPriceIsAboveTarget() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
         when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithoutDedupPrice());
 
         notificationService.consumePriceAlert(messageAboveTarget());
 
         verify(notificationMapper, never()).insert(any(Notification.class));
         verify(watchlistMapper, never()).updateById(any(Watchlist.class));
+    }
+
+    @Test
+    void consumePriceAlertRejectsMessageWithoutEventKey() {
+        PriceAlertMessage message = triggeredMessage();
+        message.setEventKey(" ");
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> notificationService.consumePriceAlert(message));
+
+        assertEquals(ResultCode.BAD_REQUEST.getCode(), exception.getCode());
+        verify(notificationMapper, never()).insert(any(Notification.class));
+    }
+
+    @Test
+    void consumePriceAlertSkipsWhenEventKeyAlreadyExists() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(existingNotification());
+
+        notificationService.consumePriceAlert(triggeredMessage());
+
+        verify(notificationMapper, never()).insert(any(Notification.class));
+        verify(watchlistMapper, never()).updateById(any(Watchlist.class));
+    }
+
+    @Test
+    void consumePriceAlertTreatsEventKeyDuplicateInsertAsIdempotentSuccess() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
+        when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithoutDedupPrice());
+        when(notificationMapper.insert(any(Notification.class)))
+                .thenThrow(new DuplicateKeyException("Duplicate entry for key 'ux_notification_event_key'"));
+
+        notificationService.consumePriceAlert(triggeredMessage());
+
+        verify(watchlistMapper, never()).updateById(any(Watchlist.class));
+    }
+
+    @Test
+    void consumePriceAlertRethrowsDuplicateKeyThatIsNotEventKeyConflict() {
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
+        when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithoutDedupPrice());
+        when(notificationMapper.insert(any(Notification.class)))
+                .thenThrow(new DuplicateKeyException("Duplicate entry for key 'other_unique_key'"));
+
+        assertThrows(DuplicateKeyException.class, () -> notificationService.consumePriceAlert(triggeredMessage()));
     }
 
     private Notification notificationOwnedByAnotherUser() {
@@ -121,6 +169,8 @@ class NotificationServiceImplTest {
 
     private PriceAlertMessage triggeredMessage() {
         return PriceAlertMessage.builder()
+                .messageId("msg-001")
+                .eventKey(eventKey())
                 .userId(99L)
                 .productId(1L)
                 .watchlistId(5L)
@@ -157,6 +207,7 @@ class NotificationServiceImplTest {
         return notification -> notification.getUserId().equals(99L)
                 && notification.getProductId().equals(1L)
                 && notification.getWatchlistId().equals(5L)
+                && eventKey().equals(notification.getEventKey())
                 && "TARGET_PRICE_REACHED".equals(notification.getNotifyType())
                 && notification.getContent().contains("Laptop")
                 && notification.getIsRead() == 0
@@ -169,5 +220,16 @@ class NotificationServiceImplTest {
         return watchlist -> watchlist.getId().equals(5L)
                 && new BigDecimal("79.00").compareTo(watchlist.getLastNotifiedPrice()) == 0
                 && watchlist.getUpdatedAt() != null;
+    }
+
+    private Notification existingNotification() {
+        Notification notification = new Notification();
+        notification.setId(100L);
+        notification.setEventKey(eventKey());
+        return notification;
+    }
+
+    private String eventKey() {
+        return "TARGET_PRICE_REACHED:99:1:5:80.00:79.00:1782468930000";
     }
 }

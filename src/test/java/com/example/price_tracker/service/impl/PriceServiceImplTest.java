@@ -186,6 +186,7 @@ class PriceServiceImplTest {
     private ArgumentMatcher<PriceAlertMessage> createdPriceAlertMessage() {
         return message -> message.getMessageId() != null
                 && !message.getMessageId().isBlank()
+                && "TARGET_PRICE_REACHED:99:1:5:80.00:79.00:1782039600000".equals(message.getEventKey())
                 && message.getUserId().equals(99L)
                 && message.getProductId().equals(1L)
                 && message.getWatchlistId().equals(5L)

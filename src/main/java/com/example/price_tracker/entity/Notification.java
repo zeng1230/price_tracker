@@ -30,6 +30,9 @@ public class Notification {
     @TableField("watchlist_id")
     private Long watchlistId;
 
+    @TableField("event_key")
+    private String eventKey;
+
     @TableField("notify_type")
     private String notifyType;
 

@@ -8,6 +8,10 @@ CREATE INDEX idx_notification_user_created_at
     ON tb_notification (user_id, created_at)
     COMMENT 'Query current user notifications ordered by created_at';
 
+CREATE UNIQUE INDEX ux_notification_event_key
+    ON tb_notification (event_key)
+    COMMENT 'Deduplicate notification business events while allowing legacy NULL values';
+
 -- Supports PriceHistoryServiceImpl.pageByProductId:
 -- WHERE product_id = ? ORDER BY captured_at DESC
 CREATE INDEX idx_price_history_product_captured_at

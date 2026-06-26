@@ -16,6 +16,8 @@ public class PriceAlertMessage {
 
     private String messageId;
 
+    private String eventKey;
+
     private Long userId;
 
     private Long productId;
