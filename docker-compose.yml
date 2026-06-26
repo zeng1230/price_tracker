@@ -16,13 +16,6 @@ services:
       - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./src/main/resources/sql/00_init_database.sql:/docker-entrypoint-initdb.d/00_init_database.sql:ro
-      - ./src/main/resources/sql/tb_user.sql:/docker-entrypoint-initdb.d/10_tb_user.sql:ro
-      - ./src/main/resources/sql/tb_product.sql:/docker-entrypoint-initdb.d/20_tb_product.sql:ro
-      - ./src/main/resources/sql/tb_price_history.sql:/docker-entrypoint-initdb.d/30_tb_price_history.sql:ro
-      - ./src/main/resources/sql/tb_watchlist.sql:/docker-entrypoint-initdb.d/40_tb_watchlist.sql:ro
-      - ./src/main/resources/sql/tb_notification.sql:/docker-entrypoint-initdb.d/50_tb_notification.sql:ro
-      - ./src/main/resources/sql/indexes.sql:/docker-entrypoint-initdb.d/90_indexes.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s

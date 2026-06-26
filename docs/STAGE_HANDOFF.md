@@ -111,14 +111,11 @@
 - `src/main/java/com/example/price_tracker/task/PriceRefreshTask.java`
 - `src/main/java/com/example/price_tracker/PraceTrackerApplication.java`
 
-### SQL
+### Database Schema
 
-- `src/main/resources/sql/00_init_database.sql`
-- `src/main/resources/sql/tb_user.sql`
-- `src/main/resources/sql/tb_product.sql`
-- `src/main/resources/sql/tb_price_history.sql`
-- `src/main/resources/sql/tb_watchlist.sql`
-- `src/main/resources/sql/tb_notification.sql`
+- Flyway is the schema owner.
+- Runtime migrations live under `src/main/resources/db/migration/`.
+- `src/main/resources/sql/` is legacy/reference only and must not be mounted for database initialization.
 
 ## 4. 当前业务链路
 
@@ -293,8 +290,8 @@
 
 启动前：
 
-1. 创建数据库 `price_tracker`。
-2. 执行 `src/main/resources/sql/` 下 SQL。
+1. 通过 Docker Compose 或手工方式启动 MySQL 8，并创建空数据库 `price_tracker`。
+2. 启动 Spring Boot 应用，由 Flyway 自动执行 `src/main/resources/db/migration/` 下的 migration。
 3. 启动 Redis。
 4. 启动 RabbitMQ。
 5. 按需覆盖 Redis 环境变量：`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`REDIS_DATABASE`、`REDIS_TIMEOUT`。

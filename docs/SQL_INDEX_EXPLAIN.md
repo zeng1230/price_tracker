@@ -1,6 +1,7 @@
 # SQL Index Explain
 
-This document records the query-driven indexes added in `src/main/resources/sql/indexes.sql`.
+This document records the query-driven indexes managed by Flyway under
+`src/main/resources/db/migration/`.
 The project uses MyBatis Plus `LambdaQueryWrapper`, so each index below is mapped to the
 current service-layer query shape instead of indexing every column.
 
@@ -21,8 +22,8 @@ current service-layer query shape instead of indexing every column.
 | Existing index | Table | Source | Reason no new index is added |
 | --- | --- | --- | --- |
 | `PRIMARY` | All business tables | Existing table DDL | Primary-key lookups such as `selectById` already use the clustered primary key. |
-| `username` unique index | `tb_user` | `tb_user.sql` declares `username VARCHAR(50) NOT NULL UNIQUE` | Login and register lookups use `username`; the unique constraint already provides the required index. |
-| `uk_user_product` | `tb_watchlist` | `tb_watchlist.sql` | Duplicate-watch checks use `user_id + product_id`; the unique constraint already covers this exact lookup. |
+| `username` unique index | `tb_user` | `V1__init_schema.sql` declares `username VARCHAR(50) NOT NULL UNIQUE` | Login and register lookups use `username`; the unique constraint already provides the required index. |
+| `uk_user_product` | `tb_watchlist` | `V1__init_schema.sql` | Duplicate-watch checks use `user_id + product_id`; the unique constraint already covers this exact lookup. |
 
 ## Indexes Intentionally Not Added
 
@@ -37,10 +38,10 @@ current service-layer query shape instead of indexing every column.
 
 ## Verification Suggestions
 
-Run the table DDL first, then apply:
+Start the application against an empty MySQL 8 database so Flyway applies all migrations, then verify `flyway_schema_history`:
 
 ```powershell
-mysql -uroot -p123456 price_tracker < src/main/resources/sql/indexes.sql
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT installed_rank,version,description,success FROM flyway_schema_history ORDER BY installed_rank;"
 ```
 
 Example `EXPLAIN` checks:

@@ -34,7 +34,7 @@
 | 类别 | 当前实现 |
 | --- | --- |
 | 语言与框架 | Java 17、Spring Boot 3.3.4、Spring MVC、Validation、AOP |
-| 持久化 | MySQL 8、MyBatis-Plus 3.5.7、手工 SQL 初始化 |
+| 持久化 | MySQL 8、MyBatis-Plus 3.5.7、Flyway schema migration |
 | 缓存与协调 | Spring Data Redis、RedisTemplate |
 | 异步消息 | Spring AMQP、RabbitMQ |
 | 安全 | JWT（JJWT 0.12.6）、BCrypt |

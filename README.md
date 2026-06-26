@@ -10,7 +10,7 @@ Price Tracker 是一个基于 Spring Boot 3 的商品价格跟踪后端。管理
 | --- | --- |
 | 运行时 | Java 17、Spring Boot 3.3.4 |
 | Web | Spring MVC、Validation、AOP |
-| 数据访问 | MySQL 8、MyBatis-Plus 3.5.7 |
+| 数据访问 | MySQL 8、MyBatis-Plus 3.5.7、Flyway |
 | 缓存与协调 | Redis 7、Spring Data Redis |
 | 消息队列 | RabbitMQ 3 Management、Spring AMQP |
 | 鉴权 | JWT、BCrypt |
@@ -95,14 +95,26 @@ HTTP Client
 | `tb_watchlist` | 用户关注、目标价与通知开关 | `(user_id, product_id)` 唯一，`last_notified_price` 业务防重 |
 | `tb_notification` | 站内通知 | `event_key` 业务唯一键、`is_read`、`send_status`、`sent_at` |
 
-建表文件位于 `src/main/resources/sql/`。Docker Compose 实际挂载其中的 `tb_user.sql`，新数据库会直接创建 `role VARCHAR(20) NOT NULL DEFAULT 'USER'`。Docker 仅在首次创建 MySQL volume 时自动执行这些 SQL；项目当前未引入 Flyway。
+数据库 schema 由 Flyway 管理，migration 位于 `src/main/resources/db/migration/`。推荐使用 MySQL 8.x；当前 `tb_user.role` 使用 MySQL 8 支持的 `CHECK` 约束，不为低版本 MySQL 降级 schema 语义。
 
-已有数据库不会自动增加字段。升级旧 volume 时，确认 `tb_user` 尚无 `role` 后手工执行：
+`src/main/resources/sql/` 仅作为 legacy/reference 保留，不再由 Docker Compose 挂载建表。Docker Compose 只启动 MySQL 并通过 `MYSQL_DATABASE` 创建空 database；业务表在 Spring Boot 应用启动时由 Flyway 自动创建。只启动 MySQL、不启动应用时，`price_tracker` 库中不会有业务表。
 
-```sql
-ALTER TABLE tb_user
-    ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'USER' AFTER nickname,
-    ADD CONSTRAINT chk_tb_user_role CHECK (role IN ('USER', 'ADMIN'));
+旧库升级必须先确认真实结构。只有已经人工核验达到当前最终 schema 的旧库，才允许使用 `baselineVersion=4` baseline；缺少 `role`、`event_key` 或查询索引的旧库不能直接 baseline 到 4。本地开发库建议备份后重建；必须保留数据时，先手工补齐并核验，再 baseline。
+
+本地旧库一次性 baseline 示例：
+
+```powershell
+./mvnw.cmd spring-boot:run `
+  -Dspring-boot.run.arguments="--spring.flyway.baseline-on-migrate=true --spring.flyway.baseline-version=4"
+```
+
+不要把 `baseline-on-migrate=true` 写入默认配置。
+
+查看 Flyway 执行历史：
+
+```powershell
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker `
+  -e "SELECT installed_rank, version, description, success FROM flyway_schema_history ORDER BY installed_rank;"
 ```
 
 随后按需将管理员账号更新为 `ADMIN`，并让所有用户重新登录。
@@ -147,6 +159,7 @@ docker compose ps
 ```
 
 `docker-compose.yml` 只启动 MySQL、Redis 和 RabbitMQ，没有应用镜像。应用的数据源目前在 `application.yml` 中固定使用本机 `root/123456`，与容器 root 密码默认值一致；`.env` 中 `MYSQL_USER` 是容器额外创建的普通用户，不是应用当前使用的账号。
+Docker Compose 不再挂载业务建表 SQL。新库的业务表和索引会在执行 `./mvnw.cmd spring-boot:run` 后由 Flyway 创建。
 
 ```powershell
 $env:REDIS_HOST="127.0.0.1"
@@ -193,7 +206,7 @@ Linux/macOS：
 - 当前已配置 publisher confirm/return；confirm ack 只表示 exchange 接收，return 表示不可路由且按发送失败处理，仍不等价于 exactly-once。
 - 当前不是微服务项目，而是单体后端；没有服务注册发现、网关、配置中心或分布式事务。
 - 当前有最小 `USER/ADMIN` 角色边界和少量管理员接口，但没有复杂 RBAC、菜单权限或后台前端。
-- 当前使用手工 SQL 初始化，没有 Flyway；Docker 初始化脚本只在空 volume 首次启动时执行。
+- 当前使用 Flyway 管理数据库 schema；Docker 只负责启动 MySQL 并创建空 database，不再负责业务建表。
 
 ## 文档
 

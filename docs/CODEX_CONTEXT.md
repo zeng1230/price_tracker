@@ -22,7 +22,7 @@ The project is currently in the **Integration & Delivery closing stage**. The ne
 | Redis | Product detail/price cache, null cache, cache rebuild lock, TTL jitter, watchlist cache, rate limiting, producer-side and consumer-side notification idempotency | `redis/*`, `ProductServiceImpl`, `WatchlistServiceImpl`, `PriceServiceImpl`, `PriceAlertConsumer` |
 | RabbitMQ | Durable direct exchange, durable queue, routing binding, JSON message conversion, asynchronous producer and consumer, traceId header propagation | `RabbitMQConfig`, `PriceAlertProducer`, `PriceAlertConsumer` |
 | Observability | Global exception handling, structured business logs, HTTP traceId filter, MQ traceId propagation, Actuator health endpoint | `GlobalExceptionHandler`, `TraceIdFilter`, `application.yml` |
-| Delivery | Middleware Docker Compose, environment variable example, SQL initialization mounts, SQL index documentation | `docker-compose.yml`, `.env.example`, `src/main/resources/sql/indexes.sql`, `docs/SQL_INDEX_EXPLAIN.md` |
+| Delivery | Middleware Docker Compose, environment variable example, Flyway schema migrations, SQL index documentation | `docker-compose.yml`, `.env.example`, `src/main/resources/db/migration/`, `docs/SQL_INDEX_EXPLAIN.md` |
 
 ## 3. Recent Delivery Changes
 
@@ -30,12 +30,12 @@ The latest low-risk delivery window completed these files without changing core 
 
 | File | Change |
 | --- | --- |
-| `docker-compose.yml` | Added MySQL 8, Redis 7, and RabbitMQ Management services with persistent volumes, exposed ports, health checks, and ordered SQL initialization mounts. |
+| `docker-compose.yml` | Added MySQL 8, Redis 7, and RabbitMQ Management services with persistent volumes, exposed ports, and health checks. MySQL starts as an empty database host; Flyway owns business schema creation. |
 | `.env.example` | Added MySQL, Redis, RabbitMQ, and JWT example environment variables. |
 | `.gitignore` | Added `.env` exclusion so local secrets are not committed. |
-| `src/main/resources/sql/indexes.sql` | Added query-driven MySQL indexes after table initialization. |
+| `src/main/resources/db/migration/` | Added Flyway migrations for the base schema, role field, notification event key, and query-driven indexes. |
 | `docs/SQL_INDEX_EXPLAIN.md` | Documented each added index, corresponding query, code location, and intentionally omitted indexes. |
-| `README.md` | Added Docker Compose middleware startup, verification commands, SQL initialization notes, project startup, and test commands. |
+| `README.md` | Added Docker Compose middleware startup, Flyway schema notes, verification commands, project startup, and test commands. |
 
 The worktree is currently dirty. Before committing, run `git status --short` and review unrelated existing files separately. Do not assume every uncommitted file belongs to the Docker/index window.
 
@@ -141,7 +141,7 @@ The current schema does not include `refresh_task_log`, `mq_message_log`, role t
 
 ### Added query-driven indexes
 
-`src/main/resources/sql/indexes.sql` is mounted into the MySQL Docker initialization directory after the table DDL files.
+Flyway migrations under `src/main/resources/db/migration/` create the business schema. Docker Compose no longer mounts business DDL into the MySQL initialization directory.
 
 | Index | Table | Covered query |
 | --- | --- | --- |
@@ -153,6 +153,8 @@ The current schema does not include `refresh_task_log`, `mq_message_log`, role t
 | `idx_product_status_updated_at` | `tb_product(status, updated_at)` | Active product list pagination |
 
 Do not add a second username index: `tb_user.username` is already indexed through its unique constraint. See `docs/SQL_INDEX_EXPLAIN.md` for the full reasoning and suggested `EXPLAIN` statements.
+
+`src/main/resources/sql/` is legacy/reference only. Do not mount those SQL files for database initialization.
 
 ## 8. Docker Compose and Environment File Status
 

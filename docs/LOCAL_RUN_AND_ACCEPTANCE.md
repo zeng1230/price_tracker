@@ -13,7 +13,7 @@ docker exec price-tracker-redis redis-cli ping
 docker exec price-tracker-rabbitmq rabbitmq-diagnostics -q ping
 ```
 
-首次创建 MySQL volume 时，Compose 会按顺序执行 `src/main/resources/sql/` 下的建表和索引脚本。已有 volume 不会重复初始化；需要全新数据时应先明确备份需求，再人工处理 volume，本文不提供破坏性命令。
+Docker Compose 只启动 MySQL、Redis 和 RabbitMQ。MySQL 容器会按 `MYSQL_DATABASE` 创建空 `price_tracker` database，但不会创建业务表；业务表和索引由 Spring Boot 启动时通过 Flyway 自动创建。只启动 MySQL、不启动应用时，数据库不会有 `tb_user`、`tb_product` 等业务表。
 
 在另一个 PowerShell 窗口启动应用：
 
@@ -24,6 +24,8 @@ $env:RABBITMQ_USERNAME="guest"
 $env:RABBITMQ_PASSWORD="guest"
 ./mvnw.cmd spring-boot:run
 ```
+
+首次应用启动后，Flyway 会执行 `src/main/resources/db/migration/` 下的 migration。推荐 MySQL 8.x；当前 schema 使用 `CHECK` 约束，不为低版本 MySQL 降级语义。
 
 ## 2. 健康检查和 Knife4j
 
@@ -118,9 +120,11 @@ docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT i
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,old_price,new_price,source,captured_at FROM tb_price_history WHERE product_id=$productId ORDER BY id DESC;"
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,user_id,product_id,target_price,notify_enabled,last_notified_price,status FROM tb_watchlist WHERE id=$watchlistId;"
 docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT id,user_id,product_id,event_key,is_read,send_status,sent_at FROM tb_notification WHERE id=$notificationId;"
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT installed_rank,version,description,success FROM flyway_schema_history ORDER BY installed_rank;"
 ```
 
 预期商品有效、历史 `source=MOCK`、关注开启、`last_notified_price` 已更新，通知 `is_read=1`、`send_status=1`。
+`flyway_schema_history` 应显示 V1 到最新版本均 `success=1`。
 
 ## 5. 验证 Redis
 
@@ -241,19 +245,40 @@ WHERE product_id = 1;
 ```
 
 预期查询以 `product_id` 为过滤条件使用 `idx_price_history_product_captured_at`。如果运行环境不支持 `EXPLAIN ANALYZE`，改用 `EXPLAIN` 并在验收报告中注明降级。
-## P1 manual SQL upgrade for existing MySQL volumes
+## 9. Flyway、旧库升级和本地重建
 
-Docker only runs `src/main/resources/sql/*.sql` when a MySQL volume is first created.
-For an existing local volume, apply this manual upgrade once:
+新开发环境：
 
-```sql
-ALTER TABLE tb_notification
-    ADD COLUMN event_key varchar(191) NULL COMMENT 'notification business event key' AFTER watchlist_id;
+1. `docker compose up -d` 启动 MySQL、Redis、RabbitMQ。
+2. `./mvnw.cmd spring-boot:run` 启动应用。
+3. Flyway 从 V1 开始执行并创建业务表、增量字段和索引。
+4. 用 `flyway_schema_history` 查询确认 migration 已成功执行。
 
-CREATE UNIQUE INDEX ux_notification_event_key
-    ON tb_notification (event_key)
-    COMMENT 'Deduplicate notification business events while allowing legacy NULL values';
+旧本地 volume：
+
+- 只有已经人工确认达到当前最终 schema 的旧库，才允许使用 `baselineVersion=4`。
+- 缺 `tb_user.role`、缺 `tb_notification.event_key`、缺 `ux_notification_event_key` 或缺查询索引的旧库，不能直接 baseline 到 4。
+- 本地开发库建议备份后重建；必须保留数据时，先手工补齐字段和索引，核验 `SHOW CREATE TABLE`、`SHOW COLUMNS`、`SHOW INDEX`，再 baseline 到 4。
+- `baseline-on-migrate` 只应用于本地一次性升级场景，不应长期写入默认配置。
+
+本地旧库一次性 baseline 示例：
+
+```powershell
+./mvnw.cmd spring-boot:run `
+  -Dspring-boot.run.arguments="--spring.flyway.baseline-on-migrate=true --spring.flyway.baseline-version=4"
 ```
 
-`event_key` stays nullable so legacy rows do not need backfill. New application messages validate
-`PriceAlertMessage.eventKey` and write a non-empty `Notification.eventKey`.
+查看 Flyway 历史：
+
+```powershell
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "SELECT installed_rank,version,description,type,success FROM flyway_schema_history ORDER BY installed_rank;"
+```
+
+本地 reset：
+
+1. 先确认是否需要备份数据。
+2. 停止应用和依赖容器。
+3. 删除项目的 MySQL Docker volume 后重新 `docker compose up -d`。
+4. 再启动 Spring Boot，让 Flyway 在空库中重新执行 V1 到最新版本。
+
+`src/main/resources/sql/` 已是 legacy/reference，不再用于 Docker 初始化。

@@ -31,7 +31,7 @@
 
 ## 测试前置条件
 
-- MySQL 数据库 `price_tracker` 已创建，并已执行 `src/main/resources/sql/` 下的初始化脚本。
+- MySQL 数据库 `price_tracker` 已创建，Spring Boot 应用已启动并由 Flyway 完成 `src/main/resources/db/migration/` 下的 schema migration。
 - Redis 已启动，应用可通过 `application.yml` 中的 Redis 配置连接。
 - RabbitMQ 已启动，应用可连接 `price.alert.exchange`、`price.alert.queue` 和 routing key `price.alert`。
 - 应用已启动，Knife4j 或接口工具可访问基础接口。

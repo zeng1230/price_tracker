@@ -1,0 +1,3 @@
+ALTER TABLE tb_user
+    ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'USER' COMMENT 'Role: USER or ADMIN' AFTER nickname,
+    ADD CONSTRAINT chk_tb_user_role CHECK (role IN ('USER', 'ADMIN'));

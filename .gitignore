@@ -66,3 +66,6 @@ out/
 /nbproject/private/
 /nbbuild/
 /dist/
+
+.env.example
+.gitignore
