@@ -18,6 +18,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -65,6 +66,26 @@ class ProductControllerAuthorizationTest {
                 .andExpect(jsonPath("$.code").value(403));
 
         verify(productService, never()).deleteProduct(3L);
+    }
+
+    @Test
+    void userCanViewPriceTrend() throws Exception {
+        mockMvc.perform(get("/api/products/3/price-trend")
+                        .header("Authorization", bearer(UserRole.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(priceHistoryService).getPriceTrend(3L);
+    }
+
+    @Test
+    void adminCanViewPriceTrend() throws Exception {
+        mockMvc.perform(get("/api/products/3/price-trend")
+                        .header("Authorization", bearer(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(priceHistoryService).getPriceTrend(3L);
     }
 
     private String validProductJson() {

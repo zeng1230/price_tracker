@@ -9,7 +9,7 @@ current service-layer query shape instead of indexing every column.
 | Index | Table | Columns | Query covered | Code location | Design reason |
 | --- | --- | --- | --- | --- | --- |
 | `idx_notification_user_created_at` | `tb_notification` | `user_id, created_at` | Current user notification page: `WHERE user_id = ? ORDER BY created_at DESC` | `NotificationServiceImpl.pageMyNotifications` | Filters by one user first, then lets MySQL read that user's notifications in time order for pagination. |
-| `idx_price_history_product_captured_at` | `tb_price_history` | `product_id, captured_at` | Product price history page: `WHERE product_id = ? ORDER BY captured_at DESC` | `PriceHistoryServiceImpl.pageByProductId` | Price history is queried per product; ordering by capture time is the dominant access path. |
+| `idx_price_history_product_captured_at` | `tb_price_history` | `product_id, captured_at` | Product history page plus single-product trend aggregation, 7/30-day windows, and first/last sample lookup | `PriceHistoryServiceImpl.pageByProductId`, `PriceHistoryMapper.selectPriceTrendAggregate` | The index narrows reads to one product and supports time ordering. No covering index is added because it would increase history-write cost while the aggregate still needs to inspect selected samples. |
 | `idx_watchlist_user_status_updated_at` | `tb_watchlist` | `user_id, status, updated_at` | Current user active watchlist page: `WHERE user_id = ? AND status = ? ORDER BY updated_at DESC` | `WatchlistServiceImpl.pageMyWatchlist` | Keeps the user's active watchlist query selective and supports stable pagination ordering. |
 | `idx_watchlist_product_status_notify` | `tb_watchlist` | `product_id, status, notify_enabled` | Price refresh fan-out: `WHERE product_id = ? AND status = 1 AND notify_enabled = 1` | `PriceServiceImpl.refreshProductPriceInternal` | Price refresh needs all active subscribers for one product; this avoids scanning unrelated watch records. |
 | `idx_product_status_id` | `tb_product` | `status, id` | Scheduled refresh scan: `WHERE status = 1 ORDER BY id ASC` | `PriceServiceImpl.refreshActiveProducts` | Batch refresh scans active products in id order; the index matches the filter and order. |
@@ -54,6 +54,16 @@ EXPLAIN SELECT * FROM tb_price_history
 WHERE product_id = 1
 ORDER BY captured_at DESC
 LIMIT 10;
+
+EXPLAIN ANALYZE
+SELECT COUNT(*),
+       SUM(new_price),
+       MIN(CASE
+               WHEN captured_at >= NOW() - INTERVAL 7 DAY
+               THEN LEAST(COALESCE(old_price, new_price), new_price)
+           END)
+FROM tb_price_history
+WHERE product_id = 1;
 
 EXPLAIN SELECT * FROM tb_watchlist
 WHERE product_id = 1 AND status = 1 AND notify_enabled = 1;

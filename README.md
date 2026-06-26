@@ -198,3 +198,23 @@ Linux/macOS：
 ## 文档
 
 统一入口见 [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)。
+
+## 价格趋势聚合
+
+已提供登录用户可访问的轻量趋势摘要接口：
+
+```http
+GET /api/products/{productId}/price-trend
+```
+
+返回当前价、近 7 天最低价、近 30 天最低价、历史最低价、历史最高价、平均价、价格变化次数、当前价相对历史最低价的差值和百分比，以及最近一次价格变动时间。普通 `USER` 和 `ADMIN` 复用同一接口；不存在或停用的商品返回 `NOT_FOUND`，当前价为空时返回 `PRICE_NOT_AVAILABLE`，需要先刷新商品价格。
+
+统计采用价格变动样本口径：
+
+- 平均价样本为第一条历史的 `old_price`、每条历史的 `new_price`，以及必要时追加的 `tb_product.current_price`。
+- `current_price` 与最后一条 `new_price` 相同时不重复计入平均价；不同时作为最新样本追加。
+- 历史最低价和最高价始终与 `current_price` 比较，以兼容管理员直接修改当前价但没有写入价格历史的情况。
+- 近 7 天和近 30 天最低价取窗口内历史记录的 `old_price/new_price` 与当前价的最小值；窗口内没有历史时回退为当前价。
+- 上述指标是变动样本近似统计，不是按价格持续时间加权的价格状态计算。
+
+趋势结果当前直接由 MySQL 聚合，不使用 Redis 缓存，也没有新增表或索引。现有 `idx_price_history_product_captured_at(product_id, captured_at)` 同时支持价格历史分页、时间窗口筛选和首末历史定位。

@@ -9,6 +9,7 @@ import com.example.price_tracker.service.ProductService;
 import com.example.price_tracker.vo.ProductDetailVo;
 import com.example.price_tracker.vo.ProductPageVo;
 import com.example.price_tracker.vo.ProductPriceVo;
+import com.example.price_tracker.vo.PriceTrendVo;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.http.MediaType;
@@ -103,6 +104,32 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.data.productId").value(1L))
                 .andExpect(jsonPath("$.data.currentPrice").value(129.99))
                 .andExpect(jsonPath("$.data.currency").value("USD"));
+    }
+
+    @Test
+    void shouldGetProductPriceTrend() throws Exception {
+        when(priceHistoryService.getPriceTrend(1L)).thenReturn(PriceTrendVo.builder()
+                .productId(1L)
+                .currency("USD")
+                .currentPrice(new BigDecimal("129.99"))
+                .lowestPrice7Days(new BigDecimal("119.99"))
+                .lowestPrice30Days(new BigDecimal("109.99"))
+                .historicalLowestPrice(new BigDecimal("99.99"))
+                .historicalHighestPrice(new BigDecimal("149.99"))
+                .averagePrice(new BigDecimal("124.99"))
+                .priceChangeCount(4L)
+                .differenceFromLowest(new BigDecimal("30.00"))
+                .differenceFromLowestPercentage(new BigDecimal("30.00"))
+                .build());
+
+        mockMvc.perform(get("/api/products/1/price-trend"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.productId").value(1L))
+                .andExpect(jsonPath("$.data.currentPrice").value(129.99))
+                .andExpect(jsonPath("$.data.averagePrice").value(124.99))
+                .andExpect(jsonPath("$.data.priceChangeCount").value(4L));
+
+        verify(priceHistoryService).getPriceTrend(1L);
     }
 
     @Test

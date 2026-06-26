@@ -162,3 +162,82 @@ docker exec price-tracker-rabbitmq rabbitmqctl list_bindings source_name destina
 ```
 
 测试通过证明代码级回归通过；本页的 HTTP、MySQL、Redis 和 RabbitMQ 检查用于证明运行时集成链路可复现，两者不能互相替代。
+
+## 8. 价格趋势聚合验收
+
+先确保 `$productId` 对应有效商品，并已通过价格刷新产生至少一条历史记录：
+
+```powershell
+$trend = Invoke-RestMethod -Method Get `
+  -Uri "$base/api/products/$productId/price-trend" `
+  -Headers $headers
+$trend | ConvertTo-Json -Depth 10
+```
+
+预期 `code=200`，`data` 包含：
+
+```text
+productId
+currency
+currentPrice
+lowestPrice7Days
+lowestPrice30Days
+historicalLowestPrice
+historicalHighestPrice
+averagePrice
+priceChangeCount
+differenceFromLowest
+differenceFromLowestPercentage
+lastPriceChangedAt
+```
+
+统计口径：
+
+- 平均价样本严格等于第一条历史 `old_price` + 每条历史 `new_price` + 可选 `currentPrice`。
+- `currentPrice` 等于最后一条 `new_price` 时不重复计入平均价；不同时追加为最新样本。
+- 历史最低价和最高价始终包含 `currentPrice`。
+- 近 7/30 天最低价取窗口内历史记录的 `old_price/new_price` 与 `currentPrice` 的最小值；窗口无历史时回退为 `currentPrice`。
+- 这是价格变动样本近似口径，不是按价格持续时间加权的状态统计。
+
+用 MySQL 手工核对样本：
+
+```powershell
+docker exec price-tracker-mysql mysql -uroot -p123456 price_tracker -e "
+SELECT id,current_price,currency,status
+FROM tb_product
+WHERE id=$productId;
+
+SELECT id,old_price,new_price,captured_at
+FROM tb_price_history
+WHERE product_id=$productId
+ORDER BY captured_at ASC,id ASC;"
+```
+
+验证权限边界：
+
+```powershell
+# USER token 和 ADMIN token 均应返回 code=200
+Invoke-RestMethod "$base/api/products/$productId/price-trend" -Headers $userHeaders
+Invoke-RestMethod "$base/api/products/$productId/price-trend" -Headers $adminHeaders
+
+# 不带 token 应返回 code=401
+Invoke-RestMethod "$base/api/products/$productId/price-trend"
+```
+
+验证无当前价边界时，可准备一个有效但 `current_price IS NULL` 的测试商品。接口应返回 `code=1002` 和提示 `current price is not available; refresh the product price first`，不能将空价格按零处理。
+
+执行计划优先使用 MySQL 8 的 `EXPLAIN ANALYZE`：
+
+```sql
+EXPLAIN ANALYZE
+SELECT COUNT(*),
+       SUM(new_price),
+       MIN(CASE
+               WHEN captured_at >= NOW() - INTERVAL 7 DAY
+               THEN LEAST(COALESCE(old_price, new_price), new_price)
+           END)
+FROM tb_price_history
+WHERE product_id = 1;
+```
+
+预期查询以 `product_id` 为过滤条件使用 `idx_price_history_product_captured_at`。如果运行环境不支持 `EXPLAIN ANALYZE`，改用 `EXPLAIN` 并在验收报告中注明降级。
