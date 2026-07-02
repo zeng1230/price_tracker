@@ -13,6 +13,9 @@ import com.example.price_tracker.vo.PriceTrendVo;
 import com.example.price_tracker.vo.ProductDetailVo;
 import com.example.price_tracker.vo.ProductPageVo;
 import com.example.price_tracker.vo.ProductPriceVo;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "Product Management", description = "Query products and price records, and manage product listings")
 @Validated
 @RestController
 @RequiredArgsConstructor
@@ -36,56 +40,67 @@ public class ProductController {
     private final ProductService productService;
     private final PriceHistoryService priceHistoryService;
 
+    @Operation(summary = "Add New Product", description = "Create a new product listing (Requires JWT and ADMIN role)")
     @PostMapping
     @AdminRequired
     public Result<Long> addProduct(@Valid @RequestBody ProductAddDto productAddDto) {
         return Result.success(productService.addProduct(productAddDto));
     }
 
+    @Operation(summary = "Get Product Details", description = "Fetch detailed information of a specific product by ID")
     @GetMapping("/{id}")
-    public Result<ProductDetailVo> getProductDetail(@PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
+    public Result<ProductDetailVo> getProductDetail(
+            @Parameter(description = "Product ID") @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
         return Result.success(productService.getProductDetail(id));
     }
 
+    @Operation(summary = "Get Product Current Price", description = "Fetch only the current price details of a specific product by ID")
     @GetMapping("/{id}/price")
-    public Result<ProductPriceVo> getCurrentPrice(@PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
+    public Result<ProductPriceVo> getCurrentPrice(
+            @Parameter(description = "Product ID") @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
         return Result.success(productService.getCurrentPrice(id));
     }
 
+    @Operation(summary = "Page Query Products", description = "Query products page by page with optional keyword search")
     @GetMapping
     public Result<PageResult<ProductPageVo>> pageProducts(
-            @RequestParam(defaultValue = "1") @Min(value = 1, message = "pageNum must be greater than 0") Long pageNum,
-            @RequestParam(defaultValue = "10") @Min(value = 1, message = "pageSize must be greater than 0") Long pageSize,
-            @RequestParam(required = false) String keyword) {
+            @Parameter(description = "Page number (1-based)") @RequestParam(defaultValue = "1") @Min(value = 1, message = "pageNum must be greater than 0") Long pageNum,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "10") @Min(value = 1, message = "pageSize must be greater than 0") Long pageSize,
+            @Parameter(description = "Keyword to filter by product name") @RequestParam(required = false) String keyword) {
         return Result.success(productService.pageProducts(pageNum, pageSize, keyword));
     }
 
+    @Operation(summary = "Update Product Info", description = "Update information of an existing product (Requires JWT and ADMIN role)")
     @PutMapping("/{id}")
     @AdminRequired
     public Result<Void> updateProduct(
-            @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id,
+            @Parameter(description = "Product ID") @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id,
             @Valid @RequestBody ProductUpdateDto productUpdateDto) {
         productService.updateProduct(id, productUpdateDto);
         return Result.success();
     }
 
+    @Operation(summary = "Delete Product", description = "Delete an existing product by ID (Requires JWT and ADMIN role)")
     @DeleteMapping("/{id}")
     @AdminRequired
-    public Result<Void> deleteProduct(@PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
+    public Result<Void> deleteProduct(
+            @Parameter(description = "Product ID") @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
         productService.deleteProduct(id);
         return Result.success();
     }
 
+    @Operation(summary = "Get Product Price History", description = "Fetch historically recorded price changes for a specific product by ID")
     @GetMapping("/{id}/price-history")
     public Result<PageResult<PriceHistoryVo>> priceHistory(
-            @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId,
+            @Parameter(description = "Product ID") @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId,
             @Valid PriceHistoryQueryDto queryDto) {
         return Result.success(priceHistoryService.pageByProductId(productId, queryDto));
     }
 
+    @Operation(summary = "Get Product Price Trend", description = "Calculate and fetch a summary of price trends (e.g. min, max, avg) for a product by ID")
     @GetMapping("/{id}/price-trend")
     public Result<PriceTrendVo> priceTrend(
-            @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId) {
+            @Parameter(description = "Product ID") @PathVariable("id") @Min(value = 1, message = "id must be greater than 0") Long productId) {
         return Result.success(priceHistoryService.getPriceTrend(productId));
     }
 }

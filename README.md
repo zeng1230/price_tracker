@@ -169,19 +169,82 @@ $env:RABBITMQ_HOST="127.0.0.1"
 
 Linux/macOS 将 `./mvnw.cmd` 替换为 `./mvnw`，环境变量使用 shell 的 `export` 或命令前缀。完整可复制验收流程见 [docs/LOCAL_RUN_AND_ACCEPTANCE.md](docs/LOCAL_RUN_AND_ACCEPTANCE.md)。
 
-## API 文档与健康检查
+## API 契约与文档
 
-- Knife4j：<http://localhost:8080/doc.html>
-- OpenAPI JSON：<http://localhost:8080/v3/api-docs>
-- Actuator：<http://localhost:8080/actuator/health>
+### 1. 文档访问入口
+应用启动后，可以通过以下路径访问在线或结构化文档：
+- **Knife4j 在线 API 双语文档**：<http://localhost:8080/doc.html>
+- **OpenAPI 3.0 v3 规范 JSON**：<http://localhost:8080/v3/api-docs>
+- **Actuator 系统健康指标**：<http://localhost:8080/actuator/health>
 
-PowerShell 健康检查：
-
+PowerShell 查看 Actuator 健康状况：
 ```powershell
 Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 10
 ```
 
-预期总状态为 `UP`，并看到 `db`、`redis` 和 `rabbit` 组件为 `UP`。
+### 2. 接口核心分类
+根据系统当前实现，核心 API 分为以下 5 大类别：
+1. **Authentication (用户鉴权)**:
+   - 包含用户注册 (`POST /api/auth/register`) 与登录 (`POST /api/auth/login`)。此分类下接口为**公开接口**，无需 JWT Token。
+2. **Administration (系统管理)**:
+   - 包含用户分页 (`GET /api/admin/users`)、商品分页 (`GET /api/admin/products`)、状态修改 (`PUT /api/admin/products/{productId}/status`) 及价格强制刷新 (`POST /api/admin/products/{productId}/refresh-price`)。此分类下接口要求 **JWT Token** 且用户角色必须为 **ADMIN**。
+3. **Product Management (商品管理)**:
+   - 普通查询包含详情查询、价格查询、商品列表分页、价格历史分页及趋势查询。
+   - 管理员写操作包含添加商品 (`POST /api/products`)、更新商品 (`PUT /api/products/{id}`)、删除商品 (`DELETE /api/products/{id}`)。写操作要求 **JWT Token** 且用户角色必须为 **ADMIN**。
+4. **Watchlist Management (关注管理)**:
+   - 包含添加关注、修改目标价/配置、取消关注及查询我的关注列表。所有接口均要求 **JWT Token**，部分写操作具备 Redis 分布式限流保护（触发频次受限时响应 429）。
+5. **Notification Management (通知管理)**:
+   - 包含查询我的通知列表 (`GET /api/notifications/my`) 及标记单条通知已读 (`PUT /api/notifications/{id}/read`)。所有接口要求 **JWT Token**。
+
+### 3. 统一响应格式说明
+应用接口采用统一的 `Result<T>` 结构包装返回：
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": { ... }
+}
+```
+
+#### 常见状态码与错误类型映射：
+- **`200` (SUCCESS)**: 接口请求处理成功。
+- **`400` (BAD_REQUEST)**: 客户端传入格式错误或缺少必填基础参数。
+- **`401` (UNAUTHORIZED)**: `Authorization` 请求头缺失或 JWT 签名/过期校验未通过。
+- **`403` (FORBIDDEN)**: 用户已成功登录，但当前角色（如 `USER`）无权访问需要 `ADMIN` 角色的管理端接口。
+- **`422` (VALIDATE_ERROR)**: DTO 数据校验校验失败（如 `@NotBlank` 或数额最小值超限）。
+- **`429` (TOO_MANY_REQUESTS)**: 触发了 API 频次限流保护（由 Redis 记录和拦截）。
+- **`1001` (PRICE_PROVIDER_NOT_FOUND)**: 未找到合适的第三方报价提供者（Mock 报价源除外）。
+- **`1002` (PRICE_NOT_AVAILABLE)**: 聚合商品报价趋势时，目标商品的当前价为空。
+- **`500` (SYSTEM_ERROR)**: 服务器内部未知异常。
+
+---
+
+## RabbitMQ 消息事件契约
+
+系统在价格达到用户关注阈值时，会向 RabbitMQ 投递 `PriceAlertMessage` 事件。
+
+### 1. 核心事件字段规范
+- **`messageId`**: 消息全局唯一标识符（UUID），主要在 Consumer 消费端作为 Redis 幂等去重 key。
+- **`eventKey`**: 业务唯一键，格式为 `TARGET_PRICE_REACHED:userId:productId:watchlistId:targetPrice:currentPrice:triggeredAtEpochMillis`。用于实现数据库级别的唯一键去重。
+- **`eventVersion`**: 契约版本号，当前版本固定为 `1`。
+- **`userId`**: 被触发关注的用户 ID。
+- **`productId`**: 价格变动的商品 ID。
+- **`watchlistId`**: 关联的关注项 ID。
+- **`currentPrice`**: 触发事件时的当前商品价格。
+- **`targetPrice`**: 用户设置的触发报警的目标价格。
+- **`productName`**: 商品名称。
+- **`triggeredAt`**: 事件触发的时间戳。
+
+### 2. 幂等与去重设计说明
+1. **短期快速去重 (Redis)**：
+   - 消费端（`PriceAlertConsumer`）在执行核心逻辑前，会在 Redis 中尝试写入 `price-tracker:idempotent:notify:mq:{messageId}`，TTL 默认为 30 分钟。
+   - 若写入失败，说明 30 分钟内处理过该 `messageId`，消息会被**直接 ACK 并丢弃**，实现快速排重。
+2. **长期强一致去重 (MySQL Unique Key)**：
+   - 数据库表 `tb_notification` 的 `event_key` 列建立了唯一索引 `ux_notification_event_key`。
+   - 若 Redis 缓存防重 key 提前失效或丢失，数据落库时会通过 SELECT 查询先做防重判断；如因高并发多线程导致 SELECT 判断穿透，MySQL 的唯一约束在执行 INSERT 时会抛出 `DuplicateKeyException`。
+   - `NotificationService` 捕获该异常后，会记录日志并**优雅返回**（消费端正常 ACK），确保不会因高并发投递引发重复通知。
+3. **一致性边界**：
+   - 本系统没有实现事务外盒模式（Transactional Outbox），发送端存在业务事务回滚但消息已投递，或消息发送失败但业务已提交的可能。系统在 RabbitMQ 层面提供的是 **At Least Once** (至少一次) 投递，并依靠消费端的 Redis + DB 强去重达成最终一致性语义。
 
 ## 测试与持续集成
 
