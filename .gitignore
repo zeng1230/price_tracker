@@ -69,3 +69,4 @@ out/
 
 .env.example
 .gitignore
+docs/
