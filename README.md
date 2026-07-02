@@ -208,17 +208,37 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
   ```
 
 #### 2. 集成测试 (Integration Tests)
-集成测试基于 **Testcontainers**，执行时会在本地启动一个临时的 MySQL 8 容器，运行完整的 Flyway 数据库迁移并校验表结构与索引设计。
-* **前提条件**：本地环境必须安装并运行 Docker (例如 Docker Desktop)。
-* **API 版本兼容注意事项**：若本地 Docker Desktop 版本较新，导致执行时抛出 `BadRequestException (Status 400)`，可在当前用户家目录下 (如 `C:\Users\<Username>`) 创建 `.docker-java.properties` 文件并写入 `api.version=1.44`。
+集成测试基于 **Testcontainers**，执行时会在本地启动临时的 MySQL 8、RabbitMQ 和 Redis 容器以校验系统的核心组件与高可用逻辑。
+* **隔离策略**：
+  * `.\mvnw.cmd test` 仅跑本地**单元测试**，完全不启动容器。
+  * `.\mvnw.cmd verify -Pintegration-test` 在 `verify` 阶段运行以 `IT` 结尾的**集成测试**，这会根据测试类需要动态拉取并启动 MySQL、RabbitMQ 和 Redis 容器。
+* **前提条件**：本地环境必须安装并运行 Docker (如 Docker Desktop 或 Rancher Desktop)。
+* **API 版本兼容注意事项**：若本地 Docker Desktop 版本较新导致执行时抛出 `BadRequestException (Status 400)`，可在当前用户家目录下 (如 `C:\Users\<Username>`) 创建 `.docker-java.properties` 文件并写入 `api.version=1.44`（切记不要将此文件提交到项目仓库）。
+
+##### 集成测试覆盖点：
+* **MySQL + Flyway 校验 (`MySQLFlywayIT.java`)**：
+  * 验证 Flyway 迁移脚本全部执行成功。
+  * 验证 `tb_user`, `tb_product`, `tb_price_history`, `tb_watchlist`, `tb_notification` 等核心业务表和唯一键/联合索引均已正确创建。
+* **RabbitMQ 通知链路校验 (`RabbitMQNotificationIT.java`)**：
+  * **绑定关系**：校验 Exchange, Queue, Routing key, 以及 DLQ/DLX 绑定关系在 Broker 真实存在。
+  * **正常投递**：验证 `PriceAlertMessage` 的发布与消费，并确认最终成功持久化到 `tb_notification` 且更新了 `tb_watchlist` 的最近通知价。
+  * **缓存去重**：验证高并发下由 Redis 幂等 Key 实现的消息防重逻辑（第二次消息被消费端丢弃）。
+  * **唯一键降级防重**：验证在 Redis 幂等 Key 丢失时，数据库的 `ux_notification_event_key` 唯一索引能作为兜底手段拒绝重复消息，即使 MyBatis select 返回 null 触发插入也会捕获 `DuplicateKeyException` 优雅忽略，保证数据最终一致性。
+  * **死信队列 (DLQ)**：通过 Stub 注入模拟消费端异常，验证消费失败后，消息触发 Listener 重试（配置为 2 次以加速测试），并在重试耗尽后自动转移至死信队列 (`price.alert.dlq`)。
+* **Redis 行为校验 (`RedisBehaviorIT.java`)**：
+  * **轻量级上下文**：本测试采用 Spring Boot 局部切片加载，仅加载 Redis 基础配置与操作类，避免了非必要的 MySQL 或 RabbitMQ 容器启动，保持极高的运行速度。
+  * **基本读写**：验证 Redis Cache 服务的 Key-Value 正常存取及删除。
+  * **限流 TTL**：验证限流 Key 正常递增且具备正向 TTL（在限制窗口秒数内递减消亡）。
+  * **防重/幂等 TTL**：验证幂等 Key 在生存周期内可以正常防重并有预期的正向 TTL（防重失效后正常消亡）。
+
 * **Windows 环境**：
   ```powershell
-  # 执行单元测试与数据库集成测试（会启动 MySQL 容器）
+  # 执行单元测试与全部集成测试（会按需启动 MySQL, RabbitMQ, Redis 容器）
   .\mvnw.cmd verify -Pintegration-test
   ```
 * **Linux / macOS 环境**：
   ```bash
-  # 执行单元测试与数据库集成测试
+  # 执行单元测试与全部集成测试
   ./mvnw verify -Pintegration-test
   ```
 
