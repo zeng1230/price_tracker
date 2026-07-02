@@ -187,31 +187,45 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
 
 ### 本地测试与报告
 
-项目集成 JaCoCo 用于生成单元测试覆盖率报告，不设硬性覆盖率门禁，测试运行完毕后报告位置如下：
+项目包含**单元测试**（Unit Tests）与**集成测试**（Integration Tests），并集成 JaCoCo 用于生成测试覆盖率报告（不设硬性覆盖率门禁）：
 - **报告路径**：`target/site/jacoco/index.html`
 
-执行命令：
+#### 1. 单元测试 (Unit Tests)
+单元测试仅涉及基础的业务逻辑，不依赖任何外部环境或 Docker 容器。
 - **Windows 环境**：
   ```powershell
   # 编译项目（跳过测试）
   .\mvnw.cmd -q -DskipTests compile
-  # 执行测试并生成 JaCoCo 报告
+  # 执行单元测试并生成 JaCoCo 报告
   .\mvnw.cmd test
   ```
 - **Linux / macOS 环境**：
   ```bash
   # 编译项目（跳过测试）
   ./mvnw -q -DskipTests compile
-  # 执行测试并生成 JaCoCo 报告
+  # 执行单元测试并生成 JaCoCo 报告
   ./mvnw test
+  ```
+
+#### 2. 集成测试 (Integration Tests)
+集成测试基于 **Testcontainers**，执行时会在本地启动一个临时的 MySQL 8 容器，运行完整的 Flyway 数据库迁移并校验表结构与索引设计。
+* **前提条件**：本地环境必须安装并运行 Docker (例如 Docker Desktop)。
+* **API 版本兼容注意事项**：若本地 Docker Desktop 版本较新，导致执行时抛出 `BadRequestException (Status 400)`，可在当前用户家目录下 (如 `C:\Users\<Username>`) 创建 `.docker-java.properties` 文件并写入 `api.version=1.44`。
+* **Windows 环境**：
+  ```powershell
+  # 执行单元测试与数据库集成测试（会启动 MySQL 容器）
+  .\mvnw.cmd verify -Pintegration-test
+  ```
+* **Linux / macOS 环境**：
+  ```bash
+  # 执行单元测试与数据库集成测试
+  ./mvnw verify -Pintegration-test
   ```
 
 ### CI 持续集成
 
-GitHub Actions 持续集成配置位于 `.github/workflows/ci.yml`。每次推送到分支或提交 Pull Request 时会自动触发 CI，CI 工作流包括：
-1. **环境准备**：使用 Linux Runner 搭配 JDK 17，缓存 Maven 依赖以加快构建速度。
-2. **配置验证**：执行 `docker compose config --quiet` 校验 `docker-compose.yml` 文件是否合法。
-3. **测试执行**：对 Maven wrapper (`mvnw`) 赋予执行权限并执行 `./mvnw test` 运行全部单元测试及生成 JaCoCo 覆盖率报告。
+GitHub Actions 持续集成配置位于 `.github/workflows/ci.yml`。每次推送到分支或提交 Pull Request 时会自动触发 CI。
+* **当前 CI Job**：当前 CI 阶段默认仅执行单元测试 (`./mvnw test`)，并在构建前使用 `docker compose config --quiet` 校验 Docker 配置文件语法。集成测试 (`./mvnw verify -Pintegration-test`) 可在后续作为独立 CI 流程接入。
 
 ## 当前能力边界
 

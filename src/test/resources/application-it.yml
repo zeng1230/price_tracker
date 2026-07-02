@@ -1,0 +1,10 @@
+spring:
+  flyway:
+    enabled: true
+  task:
+    scheduling:
+      enabled: false
+  rabbitmq:
+    listener:
+      simple:
+        auto-startup: false
