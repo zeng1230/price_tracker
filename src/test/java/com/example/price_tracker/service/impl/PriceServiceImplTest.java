@@ -12,6 +12,7 @@ import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.example.price_tracker.provider.PriceProvider;
 import com.example.price_tracker.provider.PriceProviderRouter;
 import com.example.price_tracker.provider.PriceQuote;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,9 @@ class PriceServiceImplTest {
 
     @Mock
     private RedisCacheService cacheService;
+
+    @Mock
+    private PriceTrackerMetrics metrics;
 
     @InjectMocks
     private PriceServiceImpl priceService;

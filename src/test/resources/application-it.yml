@@ -1,6 +1,6 @@
 spring:
   flyway:
-    enabled: false
+    enabled: true
   task:
     scheduling:
       enabled: false
@@ -8,10 +8,3 @@ spring:
     listener:
       simple:
         auto-startup: false
-      direct:
-        auto-startup: false
-
-management:
-  health:
-    rabbit:
-      enabled: false

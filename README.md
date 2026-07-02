@@ -4,6 +4,15 @@ Price Tracker 是一个基于 Spring Boot 3 的商品价格跟踪后端。管理
 
 项目包名为 `com.example.price_tracker`。当前形态是单体 REST API 项目，重点展示 MySQL 持久化、Redis 缓存与协调、RabbitMQ 异步通知、JWT 鉴权、TraceId 和可验收交付能力。
 
+## 工程可信度保障 (Engineering Trust)
+
+项目通过引入一系列工程化工具和设计模式，成功把代码质量和架构规范提升到了“生产可信”标准：
+* **持续集成与覆盖率度量 (CI & JaCoCo)**：接入了 GitHub Actions 持续集成工作流，通过 JaCoCo 进行代码覆盖率度量，保障每一次代码修改的质量。
+* **集成测试容器化 (MySQL/Redis/RabbitMQ Testcontainers)**：使用 Testcontainers 进行容器化集成测试隔离。在运行 `mvnw verify` 时自动按需拉取和构建数据库与中间件实例，确保测试的可复现性与真实环境一致。
+* **API 契约补强与自动文档 (OpenAPI & Knife4j)**：细化并锁定了核心 API 的统一响应码、错误码和 DTO 字段规范，使用 Knife4j 和 OpenAPI 3 自动渲染规范文档。
+* **微观运行时可观测性 (Actuator & Micrometer)**：通过 Spring Boot Actuator 仅对内安全暴露核心运行时监控指标；封装 `PriceTrackerMetrics` 收集业务微观指标（刷新尝试/最终成功率、MQ发布/消费状态、限流阻断拦截等）。
+* **清晰可量化的设计边界 (Reliability Boundary Doc)**：编写了详细的可靠性分析文档，不夸大中间件语义，真实定义了当前单体事务下的状态窗口和数据丢失风险，为后续 Outbox 架构升级做好了设计准备。
+
 ## 技术栈
 
 | 类别 | 技术 |
@@ -158,6 +167,8 @@ docker compose up -d
 docker compose ps
 ```
 
+`.env.example` 是可提交的本地模板，只包含占位或非敏感配置。复制后按本机环境填写真实密码、账号或私有配置；真实 `.env` 不要提交。
+
 `docker-compose.yml` 只启动 MySQL、Redis 和 RabbitMQ，没有应用镜像。应用的数据源目前在 `application.yml` 中固定使用本机 `root/123456`，与容器 root 密码默认值一致；`.env` 中 `MYSQL_USER` 是容器额外创建的普通用户，不是应用当前使用的账号。
 Docker Compose 不再挂载业务建表 SQL。新库的业务表和索引会在执行 `./mvnw.cmd spring-boot:run` 后由 Flyway 创建。
 
@@ -169,33 +180,174 @@ $env:RABBITMQ_HOST="127.0.0.1"
 
 Linux/macOS 将 `./mvnw.cmd` 替换为 `./mvnw`，环境变量使用 shell 的 `export` 或命令前缀。完整可复制验收流程见 [docs/LOCAL_RUN_AND_ACCEPTANCE.md](docs/LOCAL_RUN_AND_ACCEPTANCE.md)。
 
-## API 文档与健康检查
+## API 契约与文档
 
-- Knife4j：<http://localhost:8080/doc.html>
-- OpenAPI JSON：<http://localhost:8080/v3/api-docs>
-- Actuator：<http://localhost:8080/actuator/health>
+### 1. 文档访问入口
+应用启动后，可以通过以下路径访问在线或结构化文档：
+- **Knife4j 在线 API 双语文档**：<http://localhost:8080/doc.html>
+- **OpenAPI 3.0 v3 规范 JSON**：<http://localhost:8080/v3/api-docs>
+- **Actuator 系统健康指标**：<http://localhost:8080/actuator/health>
 
-PowerShell 健康检查：
-
+PowerShell 查看 Actuator 健康状况：
 ```powershell
 Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 10
 ```
 
-预期总状态为 `UP`，并看到 `db`、`redis` 和 `rabbit` 组件为 `UP`。
+### 2. 接口核心分类
+根据系统当前实现，核心 API 分为以下 5 大类别：
+1. **Authentication (用户鉴权)**:
+   - 包含用户注册 (`POST /api/auth/register`) 与登录 (`POST /api/auth/login`)。此分类下接口为**公开接口**，无需 JWT Token。
+2. **Administration (系统管理)**:
+   - 包含用户分页 (`GET /api/admin/users`)、商品分页 (`GET /api/admin/products`)、状态修改 (`PUT /api/admin/products/{productId}/status`) 及价格强制刷新 (`POST /api/admin/products/{productId}/refresh-price`)。此分类下接口要求 **JWT Token** 且用户角色必须为 **ADMIN**。
+3. **Product Management (商品管理)**:
+   - 普通查询包含详情查询、价格查询、商品列表分页、价格历史分页及趋势查询。
+   - 管理员写操作包含添加商品 (`POST /api/products`)、更新商品 (`PUT /api/products/{id}`)、删除商品 (`DELETE /api/products/{id}`)。写操作要求 **JWT Token** 且用户角色必须为 **ADMIN**。
+4. **Watchlist Management (关注管理)**:
+   - 包含添加关注、修改目标价/配置、取消关注及查询我的关注列表。所有接口均要求 **JWT Token**，部分写操作具备 Redis 分布式限流保护（触发频次受限时响应 429）。
+5. **Notification Management (通知管理)**:
+   - 包含查询我的通知列表 (`GET /api/notifications/my`) 及标记单条通知已读 (`PUT /api/notifications/{id}/read`)。所有接口要求 **JWT Token**。
 
-## 测试命令
-
-```powershell
-./mvnw.cmd -q -DskipTests compile
-./mvnw.cmd -q test
+### 3. 统一响应格式说明
+应用接口采用统一的 `Result<T>` 结构包装返回：
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": { ... }
+}
 ```
 
-Linux/macOS：
+#### 常见状态码与错误类型映射：
+- **`200` (SUCCESS)**: 接口请求处理成功。
+- **`400` (BAD_REQUEST)**: 客户端传入格式错误或缺少必填基础参数。
+- **`401` (UNAUTHORIZED)**: `Authorization` 请求头缺失或 JWT 签名/过期校验未通过。
+- **`403` (FORBIDDEN)**: 用户已成功登录，但当前角色（如 `USER`）无权访问需要 `ADMIN` 角色的管理端接口。
+- **`422` (VALIDATE_ERROR)**: DTO 数据校验校验失败（如 `@NotBlank` 或数额最小值超限）。
+- **`429` (TOO_MANY_REQUESTS)**: 触发了 API 频次限流保护（由 Redis 记录和拦截）。
+- **`1001` (PRICE_PROVIDER_NOT_FOUND)**: 未找到合适的第三方报价提供者（Mock 报价源除外）。
+- **`1002` (PRICE_NOT_AVAILABLE)**: 聚合商品报价趋势时，目标商品的当前价为空。
+- **`500` (SYSTEM_ERROR)**: 服务器内部未知异常。
 
-```bash
-./mvnw -q -DskipTests compile
-./mvnw -q test
-```
+---
+
+## RabbitMQ 消息事件契约
+
+系统在价格达到用户关注阈值时，会向 RabbitMQ 投递 `PriceAlertMessage` 事件。
+
+### 1. 核心事件字段规范
+- **`messageId`**: 消息全局唯一标识符（UUID），主要在 Consumer 消费端作为 Redis 幂等去重 key。
+- **`eventKey`**: 业务唯一键，格式为 `TARGET_PRICE_REACHED:userId:productId:watchlistId:targetPrice:currentPrice:triggeredAtEpochMillis`。用于实现数据库级别的唯一键去重。
+- **`eventVersion`**: 契约版本号，当前版本固定为 `1`。
+- **`userId`**: 被触发关注的用户 ID。
+- **`productId`**: 价格变动的商品 ID。
+- **`watchlistId`**: 关联的关注项 ID。
+- **`currentPrice`**: 触发事件时的当前商品价格。
+- **`targetPrice`**: 用户设置的触发报警的目标价格。
+- **`productName`**: 商品名称。
+- **`triggeredAt`**: 事件触发的时间戳。
+
+### 2. 幂等与去重设计说明
+1. **短期快速去重 (Redis)**：
+   - 消费端（`PriceAlertConsumer`）在执行核心逻辑前，会在 Redis 中尝试写入 `price-tracker:idempotent:notify:mq:{messageId}`，TTL 默认为 30 分钟。
+   - 若写入失败，说明 30 分钟内处理过该 `messageId`，消息会被**直接 ACK 并丢弃**，实现快速排重。
+2. **长期强一致去重 (MySQL Unique Key)**：
+   - 数据库表 `tb_notification` 的 `event_key` 列建立了唯一索引 `ux_notification_event_key`。
+   - 若 Redis 缓存防重 key 提前失效或丢失，数据落库时会通过 SELECT 查询先做防重判断；如因高并发多线程导致 SELECT 判断穿透，MySQL 的唯一约束在执行 INSERT 时会抛出 `DuplicateKeyException`。
+   - `NotificationService` 捕获该异常后，会记录日志并**优雅返回**（消费端正常 ACK），确保不会因高并发投递引发重复通知。
+3. **一致性边界**：
+   - 本系统没有实现事务外盒模式（Transactional Outbox），发送端存在业务事务回滚但消息已投递，或消息发送失败但业务已提交的可能。系统在 RabbitMQ 层面提供的是 **At Least Once** (至少一次) 投递，并依靠消费端的 Redis + DB 强去重达成最终一致性语义。
+
+## 监控与可观测性 (Actuator + Micrometer)
+
+系统引入了 Spring Boot Actuator 与 Micrometer Facade，用于在本地观察系统性能和面试展示系统可观测性。当前阶段暂未接入 Prometheus / Grafana / OpenTelemetry。
+
+### 1. Actuator 端点暴露策略
+
+* **默认环境 (Default Profile)**：仅暴露 `/actuator/health` 以满足基础监控诉求，保持克制，杜绝泄露敏感的 `/actuator/env`, `/actuator/beans`, `/actuator/threaddump` 等端点。
+* **开发环境 (dev / local Profile)**：`application-dev.yml` 与 `application-local.yml` 额外暴露 `/actuator/metrics` 端口，用于本地观测性能指标及验证埋点。
+
+### 2. 最小业务指标清单
+
+系统通过 `PriceTrackerMetrics` facade 统一封装埋点逻辑，采用低基数标签防止指标爆炸，禁止包含 `productId`, `userId`, `traceId`, `eventKey` 等高基数变量。
+
+| 指标名称 | 类型 | 含义 | 维度/标签 (Labels) |
+| --- | --- | --- | --- |
+| `price_refresh_total` | Counter | 价格刷新**尝试**次数 (Attempt-level，而非最终业务次数。若单商品重试2次后成功，会累计2次 `failed` 与1次 `success`) | `result` (success/failed), `provider` (如 MOCK) |
+| `price_refresh_final_total` | Counter | 商品价格刷新操作**最终**业务结果次数 (一轮刷新中无论重试几次，最终只记录一次结果) | `result` (success/failed), `provider` (如 MOCK) |
+| `price_provider_fetch_seconds` | Timer | 第三方报价源 (PriceProvider) 调用的响应耗时 | `provider` (如 MOCK), `result` (success/failed) |
+| `price_alert_publish_total` | Counter | 价格报警消息的发布次数 | `result` (success: 确认接受/failed: 发布异常/returned: 无法路由) |
+| `price_alert_consume_total` | Counter | 价格报警消息消费端处理次数 | `result` (success: 通知成功/failed: 消费异常/duplicate: 幂等命中跳过) |
+| `rate_limit_block_total` | Counter | 接口触发防刷限流的拦截次数 | `api` (低基数映射，如 watchlist_add, watchlist_update, watchlist_delete) |
+
+### 3. 本地观测方法
+
+在开发环境下启动应用后，可通过如下接口查看指标：
+* **查询所有可用指标列表**：`GET http://localhost:8080/actuator/metrics`
+* **查看特定指标的详细数据及标签过滤**：`GET http://localhost:8080/actuator/metrics/{metricName}` (例如 `/actuator/metrics/price_refresh_total`)
+
+## 测试与持续集成
+
+### 本地测试与报告
+
+项目包含**单元测试**（Unit Tests）与**集成测试**（Integration Tests），并集成 JaCoCo 用于生成测试覆盖率报告（不设硬性覆盖率门禁）：
+- **报告路径**：`target/site/jacoco/index.html`
+
+#### 1. 单元测试 (Unit Tests)
+单元测试仅涉及基础的业务逻辑，不依赖任何外部 MySQL、Redis、RabbitMQ 或 Docker 容器。`test` profile 会禁用 Flyway、调度任务、RabbitMQ listener 自动启动和 RabbitMQ health check，避免 `.\mvnw.cmd test` 连接本机中间件。
+- **Windows 环境**：
+  ```powershell
+  # 编译项目（跳过测试）
+  .\mvnw.cmd -q -DskipTests compile
+  # 执行单元测试并生成 JaCoCo 报告
+  .\mvnw.cmd test
+  ```
+- **Linux / macOS 环境**：
+  ```bash
+  # 编译项目（跳过测试）
+  ./mvnw -q -DskipTests compile
+  # 执行单元测试并生成 JaCoCo 报告
+  ./mvnw test
+  ```
+
+#### 2. 集成测试 (Integration Tests)
+集成测试基于 **Testcontainers**，执行时会在本地启动临时的 MySQL 8、RabbitMQ 和 Redis 容器以校验系统的核心组件与高可用逻辑。
+* **隔离策略**：
+  * `.\mvnw.cmd test` 仅跑本地**单元测试**，不连接本机 MySQL、Redis、RabbitMQ，也不启动容器。
+  * `.\mvnw.cmd verify -Pintegration-test` 在 `verify` 阶段运行以 `IT` 结尾的**集成测试**，这会根据测试类需要动态拉取并启动 MySQL、RabbitMQ 和 Redis 容器。
+* **前提条件**：本地环境必须安装并运行 Docker (如 Docker Desktop 或 Rancher Desktop)。
+* **API 版本兼容注意事项**：若本地 Docker Desktop 版本较新导致执行时抛出 `BadRequestException (Status 400)`，可在当前用户家目录下 (如 `C:\Users\<Username>`) 创建 `.docker-java.properties` 文件并写入 `api.version=1.44`（切记不要将此文件提交到项目仓库）。
+
+##### 集成测试覆盖点：
+* **MySQL + Flyway 校验 (`MySQLFlywayIT.java`)**：
+  * 验证 Flyway 迁移脚本全部执行成功。
+  * 验证 `tb_user`, `tb_product`, `tb_price_history`, `tb_watchlist`, `tb_notification` 等核心业务表和唯一键/联合索引均已正确创建。
+* **RabbitMQ 通知链路校验 (`RabbitMQNotificationIT.java`)**：
+  * **绑定关系**：校验 Exchange, Queue, Routing key, 以及 DLQ/DLX 绑定关系在 Broker 真实存在。
+  * **正常投递**：验证 `PriceAlertMessage` 的发布与消费，并确认最终成功持久化到 `tb_notification` 且更新了 `tb_watchlist` 的最近通知价。
+  * **缓存去重**：验证高并发下由 Redis 幂等 Key 实现的消息防重逻辑（第二次消息被消费端丢弃）。
+  * **唯一键降级防重**：验证在 Redis 幂等 Key 丢失时，数据库的 `ux_notification_event_key` 唯一索引能作为兜底手段拒绝重复消息，即使 MyBatis select 返回 null 触发插入也会捕获 `DuplicateKeyException` 优雅忽略，保证数据最终一致性。
+  * **死信队列 (DLQ)**：通过 Stub 注入模拟消费端异常，验证消费失败后，消息触发 Listener 重试（配置为 2 次以加速测试），并在重试耗尽后自动转移至死信队列 (`price.alert.dlq`)。
+* **Redis 行为校验 (`RedisBehaviorIT.java`)**：
+  * **轻量级上下文**：本测试采用 Spring Boot 局部切片加载，仅加载 Redis 基础配置与操作类，避免了非必要的 MySQL 或 RabbitMQ 容器启动，保持极高的运行速度。
+  * **基本读写**：验证 Redis Cache 服务的 Key-Value 正常存取及删除。
+  * **限流 TTL**：验证限流 Key 正常递增且具备正向 TTL（在限制窗口秒数内递减消亡）。
+  * **防重/幂等 TTL**：验证幂等 Key 在生存周期内可以正常防重并有预期的正向 TTL（防重失效后正常消亡）。
+
+* **Windows 环境**：
+  ```powershell
+  # 执行单元测试与全部集成测试（会按需启动 MySQL, RabbitMQ, Redis 容器）
+  .\mvnw.cmd verify -Pintegration-test
+  ```
+* **Linux / macOS 环境**：
+  ```bash
+  # 执行单元测试与全部集成测试
+  ./mvnw verify -Pintegration-test
+  ```
+
+### CI 持续集成
+
+GitHub Actions 持续集成配置位于 `.github/workflows/ci.yml`。每次推送到分支或提交 Pull Request 时会自动触发 CI。
+* **当前 CI Job**：当前 CI 阶段默认仅执行单元测试 (`./mvnw test`)，并在构建前使用 `docker compose config --quiet` 校验 Docker 配置文件语法。集成测试 (`./mvnw verify -Pintegration-test`) 可在后续作为独立 CI 流程接入。
 
 ## 当前能力边界
 
@@ -208,9 +360,6 @@ Linux/macOS：
 - 当前有最小 `USER/ADMIN` 角色边界和少量管理员接口，但没有复杂 RBAC、菜单权限或后台前端。
 - 当前使用 Flyway 管理数据库 schema；Docker 只负责启动 MySQL 并创建空 database，不再负责业务建表。
 
-## 文档
-
-统一入口见 [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)。
 
 ## 价格趋势聚合
 

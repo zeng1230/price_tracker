@@ -17,6 +17,7 @@ import com.example.price_tracker.provider.PriceProvider;
 import com.example.price_tracker.provider.PriceProviderRouter;
 import com.example.price_tracker.provider.PriceQuote;
 import com.example.price_tracker.redis.RedisCacheService;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.redis.RedisKeyManager;
 import com.example.price_tracker.service.PriceService;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,8 @@ public class PriceServiceImpl implements PriceService {
     private final PriceAlertProducer priceAlertProducer;
     private final PriceProviderRouter priceProviderRouter;
     private final RedisCacheService cacheService;
+    private final PriceTrackerMetrics metrics;
+    private final ThreadLocal<String> lastResolvedProvider = new ThreadLocal<>();
 
     @Value("${notification.idempotent.ttl-minutes:10}")
     private long notificationIdempotentTtlMinutes = 10;
@@ -58,47 +61,77 @@ public class PriceServiceImpl implements PriceService {
     @Override
     @Transactional
     public void refreshProductPrice(Long productId) {
-        refreshProductPriceInternal(productId);
+        lastResolvedProvider.remove();
+        try {
+            refreshProductPriceInternal(productId);
+            String providerCode = lastResolvedProvider.get();
+            metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_SUCCESS, providerCode != null ? providerCode : "unknown");
+        } catch (RuntimeException exception) {
+            String providerCode = lastResolvedProvider.get();
+            metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_FAILED, providerCode != null ? providerCode : "unknown");
+            throw exception;
+        } finally {
+            lastResolvedProvider.remove();
+        }
     }
 
     private int refreshProductPriceInternal(Long productId) {
         Product product = getActiveProductOrThrow(productId);
         BigDecimal oldPrice = product.getCurrentPrice() == null ? DEFAULT_PRICE : product.getCurrentPrice();
-        PriceProvider priceProvider = priceProviderRouter.route(product);
-        PriceQuote quote = priceProvider.fetchPrice(product);
-        BigDecimal newPrice = quote.price();
-        LocalDateTime capturedAt = quote.capturedAt();
-        product.setCurrency(quote.currency());
-        product.setLastCheckedAt(capturedAt);
-        if (newPrice.compareTo(oldPrice) == 0) {
+        PriceProvider priceProvider = null;
+        long startNanos = System.nanoTime();
+        try {
+            priceProvider = priceProviderRouter.route(product);
+            lastResolvedProvider.set(priceProvider.providerCode());
+            PriceQuote quote = priceProvider.fetchPrice(product);
+            long durationNanos = System.nanoTime() - startNanos;
+            metrics.recordPriceProviderFetch(priceProvider.providerCode(), PriceTrackerMetrics.RESULT_SUCCESS, Duration.ofNanos(durationNanos));
+
+            BigDecimal newPrice = quote.price();
+            LocalDateTime capturedAt = quote.capturedAt();
+            product.setCurrency(quote.currency());
+            product.setLastCheckedAt(capturedAt);
+            if (newPrice.compareTo(oldPrice) == 0) {
+                productMapper.updateById(product);
+                clearProductCache(productId);
+                metrics.recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_SUCCESS, priceProvider.providerCode());
+                return 0;
+            }
+            product.setCurrentPrice(newPrice);
+            product.setUpdatedAt(capturedAt);
             productMapper.updateById(product);
             clearProductCache(productId);
-            return 0;
-        }
-        product.setCurrentPrice(newPrice);
-        product.setUpdatedAt(capturedAt);
-        productMapper.updateById(product);
-        clearProductCache(productId);
-        priceHistoryMapper.insert(PriceHistory.builder()
-                .productId(product.getId())
-                .oldPrice(oldPrice)
-                .newPrice(newPrice)
-                .capturedAt(capturedAt)
-                .source(quote.source())
-                .build());
-        int notificationTriggeredCount = 0;
-        List<Watchlist> watchlists = watchlistMapper.selectList(new LambdaQueryWrapper<Watchlist>()
-                .eq(Watchlist::getProductId, productId)
-                .eq(Watchlist::getStatus, ACTIVE_STATUS)
-                .eq(Watchlist::getNotifyEnabled, NOTIFY_ENABLED));
-        for (Watchlist watchlist : watchlists) {
-            if (shouldNotify(watchlist, newPrice)) {
-                if (sendAlertIfNotDuplicate(product, watchlist, newPrice, capturedAt)) {
-                    notificationTriggeredCount++;
+            priceHistoryMapper.insert(PriceHistory.builder()
+                    .productId(product.getId())
+                    .oldPrice(oldPrice)
+                    .newPrice(newPrice)
+                    .capturedAt(capturedAt)
+                    .source(quote.source())
+                    .build());
+            int notificationTriggeredCount = 0;
+            List<Watchlist> watchlists = watchlistMapper.selectList(new LambdaQueryWrapper<Watchlist>()
+                    .eq(Watchlist::getProductId, productId)
+                    .eq(Watchlist::getStatus, ACTIVE_STATUS)
+                    .eq(Watchlist::getNotifyEnabled, NOTIFY_ENABLED));
+            for (Watchlist watchlist : watchlists) {
+                if (shouldNotify(watchlist, newPrice)) {
+                    if (sendAlertIfNotDuplicate(product, watchlist, newPrice, capturedAt)) {
+                        notificationTriggeredCount++;
+                    }
                 }
             }
+            metrics.recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_SUCCESS, priceProvider.providerCode());
+            return notificationTriggeredCount;
+        } catch (RuntimeException exception) {
+            long durationNanos = System.nanoTime() - startNanos;
+            String providerCode = (priceProvider != null) ? priceProvider.providerCode() : "unknown";
+            if (priceProvider != null) {
+                lastResolvedProvider.set(providerCode);
+                metrics.recordPriceProviderFetch(providerCode, PriceTrackerMetrics.RESULT_FAILED, Duration.ofNanos(durationNanos));
+            }
+            metrics.recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_FAILED, providerCode);
+            throw exception;
         }
-        return notificationTriggeredCount;
     }
 
     @Override
@@ -148,15 +181,23 @@ public class PriceServiceImpl implements PriceService {
 
     private int refreshProductWithRetry(Long productId) {
         RuntimeException lastException = null;
+        lastResolvedProvider.remove();
         for (int attempt = 0; attempt <= MAX_REFRESH_RETRIES; attempt++) {
             try {
-                return refreshProductPriceInternal(productId);
+                int notificationCount = refreshProductPriceInternal(productId);
+                String providerCode = lastResolvedProvider.get();
+                metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_SUCCESS, providerCode != null ? providerCode : "unknown");
+                lastResolvedProvider.remove();
+                return notificationCount;
             } catch (RuntimeException exception) {
                 lastException = exception;
                 log.warn("price refresh attempt failed, productId={}, attempt={}, maxRetries={}, message={}",
                         productId, attempt + 1, MAX_REFRESH_RETRIES, exception.getMessage());
             }
         }
+        String providerCode = lastResolvedProvider.get();
+        metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_FAILED, providerCode != null ? providerCode : "unknown");
+        lastResolvedProvider.remove();
         throw lastException;
     }
 

@@ -12,6 +12,7 @@ import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.slf4j.MDC;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -29,6 +30,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
 
     private final RabbitTemplate rabbitTemplate;
     private final RedisCacheService cacheService;
+    private final PriceTrackerMetrics metrics;
     private final Set<String> returnedMessageIds = ConcurrentHashMap.newKeySet();
 
     @PostConstruct
@@ -89,6 +91,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
             );
         } catch (Exception ex) {
             cacheService.delete(producerIdempotentKey);
+            metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_FAILED);
             log.error(
                     "Failed to publish price alert message synchronously, messageId={}, eventKey={}, routingKey={}, watchlistId={}, productId={}, userId={}, productName={}, currentPrice={}, targetPrice={}, decision=delete_producer_idempotent_key",
                     message.getMessageId(),
@@ -114,6 +117,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
             return;
         }
         if (ack) {
+            metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_SUCCESS);
             boolean returned = returnedMessageIds.remove(priceAlertCorrelationData.messageId());
             if (returned) {
                 log.warn(
@@ -136,6 +140,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
         }
         cacheService.delete(priceAlertCorrelationData.producerIdempotentKey());
         returnedMessageIds.remove(priceAlertCorrelationData.messageId());
+        metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_FAILED);
         log.error(
                 "Publisher confirm nack, messageId={}, eventKey={}, productId={}, userId={}, cause={}, decision=delete_producer_idempotent_key",
                 priceAlertCorrelationData.messageId(),
@@ -157,6 +162,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
         if (StringUtils.isNotBlank(producerIdempotentKey)) {
             cacheService.delete(producerIdempotentKey);
         }
+        metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_RETURNED);
         log.error(
                 "Publisher return, price alert message is unroutable, messageId={}, eventKey={}, exchange={}, routingKey={}, replyCode={}, replyText={}, decision=delete_producer_idempotent_key",
                 messageId,
