@@ -167,6 +167,8 @@ docker compose up -d
 docker compose ps
 ```
 
+`.env.example` 是可提交的本地模板，只包含占位或非敏感配置。复制后按本机环境填写真实密码、账号或私有配置；真实 `.env` 不要提交。
+
 `docker-compose.yml` 只启动 MySQL、Redis 和 RabbitMQ，没有应用镜像。应用的数据源目前在 `application.yml` 中固定使用本机 `root/123456`，与容器 root 密码默认值一致；`.env` 中 `MYSQL_USER` 是容器额外创建的普通用户，不是应用当前使用的账号。
 Docker Compose 不再挂载业务建表 SQL。新库的业务表和索引会在执行 `./mvnw.cmd spring-boot:run` 后由 Flyway 创建。
 
@@ -262,7 +264,7 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
 ### 1. Actuator 端点暴露策略
 
 * **默认环境 (Default Profile)**：仅暴露 `/actuator/health` 以满足基础监控诉求，保持克制，杜绝泄露敏感的 `/actuator/env`, `/actuator/beans`, `/actuator/threaddump` 等端点。
-* **开发环境 (dev / local Profile)**：额外暴露 `/actuator/metrics` 端口，用于本地观测性能指标及验证埋点。
+* **开发环境 (dev / local Profile)**：`application-dev.yml` 与 `application-local.yml` 额外暴露 `/actuator/metrics` 端口，用于本地观测性能指标及验证埋点。
 
 ### 2. 最小业务指标清单
 
@@ -291,7 +293,7 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
 - **报告路径**：`target/site/jacoco/index.html`
 
 #### 1. 单元测试 (Unit Tests)
-单元测试仅涉及基础的业务逻辑，不依赖任何外部环境或 Docker 容器。
+单元测试仅涉及基础的业务逻辑，不依赖任何外部 MySQL、Redis、RabbitMQ 或 Docker 容器。`test` profile 会禁用 Flyway、调度任务、RabbitMQ listener 自动启动和 RabbitMQ health check，避免 `.\mvnw.cmd test` 连接本机中间件。
 - **Windows 环境**：
   ```powershell
   # 编译项目（跳过测试）
@@ -310,7 +312,7 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
 #### 2. 集成测试 (Integration Tests)
 集成测试基于 **Testcontainers**，执行时会在本地启动临时的 MySQL 8、RabbitMQ 和 Redis 容器以校验系统的核心组件与高可用逻辑。
 * **隔离策略**：
-  * `.\mvnw.cmd test` 仅跑本地**单元测试**，完全不启动容器。
+  * `.\mvnw.cmd test` 仅跑本地**单元测试**，不连接本机 MySQL、Redis、RabbitMQ，也不启动容器。
   * `.\mvnw.cmd verify -Pintegration-test` 在 `verify` 阶段运行以 `IT` 结尾的**集成测试**，这会根据测试类需要动态拉取并启动 MySQL、RabbitMQ 和 Redis 容器。
 * **前提条件**：本地环境必须安装并运行 Docker (如 Docker Desktop 或 Rancher Desktop)。
 * **API 版本兼容注意事项**：若本地 Docker Desktop 版本较新导致执行时抛出 `BadRequestException (Status 400)`，可在当前用户家目录下 (如 `C:\Users\<Username>`) 创建 `.docker-java.properties` 文件并写入 `api.version=1.44`（切记不要将此文件提交到项目仓库）。

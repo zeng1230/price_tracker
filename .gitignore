@@ -67,5 +67,4 @@ out/
 /nbbuild/
 /dist/
 
-.env.example
 .gitignore
