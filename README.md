@@ -183,19 +183,35 @@ Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 
 
 预期总状态为 `UP`，并看到 `db`、`redis` 和 `rabbit` 组件为 `UP`。
 
-## 测试命令
+## 测试与持续集成
 
-```powershell
-./mvnw.cmd -q -DskipTests compile
-./mvnw.cmd -q test
-```
+### 本地测试与报告
 
-Linux/macOS：
+项目集成 JaCoCo 用于生成单元测试覆盖率报告，不设硬性覆盖率门禁，测试运行完毕后报告位置如下：
+- **报告路径**：`target/site/jacoco/index.html`
 
-```bash
-./mvnw -q -DskipTests compile
-./mvnw -q test
-```
+执行命令：
+- **Windows 环境**：
+  ```powershell
+  # 编译项目（跳过测试）
+  .\mvnw.cmd -q -DskipTests compile
+  # 执行测试并生成 JaCoCo 报告
+  .\mvnw.cmd test
+  ```
+- **Linux / macOS 环境**：
+  ```bash
+  # 编译项目（跳过测试）
+  ./mvnw -q -DskipTests compile
+  # 执行测试并生成 JaCoCo 报告
+  ./mvnw test
+  ```
+
+### CI 持续集成
+
+GitHub Actions 持续集成配置位于 `.github/workflows/ci.yml`。每次推送到分支或提交 Pull Request 时会自动触发 CI，CI 工作流包括：
+1. **环境准备**：使用 Linux Runner 搭配 JDK 17，缓存 Maven 依赖以加快构建速度。
+2. **配置验证**：执行 `docker compose config --quiet` 校验 `docker-compose.yml` 文件是否合法。
+3. **测试执行**：对 Maven wrapper (`mvnw`) 赋予执行权限并执行 `./mvnw test` 运行全部单元测试及生成 JaCoCo 覆盖率报告。
 
 ## 当前能力边界
 
