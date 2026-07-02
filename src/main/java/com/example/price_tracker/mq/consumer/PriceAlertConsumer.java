@@ -5,6 +5,7 @@ import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ public class PriceAlertConsumer {
 
     private final NotificationService notificationService;
     private final RedisCacheService cacheService;
+    private final PriceTrackerMetrics metrics;
 
     @Value("${notification.consumer-idempotent.ttl-minutes:30}")
     private long consumerIdempotentTtlMinutes = 30;
@@ -63,6 +65,7 @@ public class PriceAlertConsumer {
                 "1",
                 Duration.ofMinutes(consumerIdempotentTtlMinutes));
         if (!acquired) {
+            metrics.recordPriceAlertConsume(PriceTrackerMetrics.RESULT_DUPLICATE);
             log.info(
                     "Idempotent hit for price alert message, key={}, messageId={}, watchlistId={}, productId={}, userId={}, decision=ack_skip",
                     idempotentKey,
@@ -83,6 +86,7 @@ public class PriceAlertConsumer {
                     message == null ? null : message.getUserId()
             );
             notificationService.consumePriceAlert(message);
+            metrics.recordPriceAlertConsume(PriceTrackerMetrics.RESULT_SUCCESS);
             log.info(
                     "Notification send success, key={}, messageId={}, watchlistId={}, productId={}, userId={}",
                     idempotentKey,
@@ -93,6 +97,7 @@ public class PriceAlertConsumer {
             );
         } catch (Exception ex) {
             cacheService.delete(idempotentKey);
+            metrics.recordPriceAlertConsume(PriceTrackerMetrics.RESULT_FAILED);
             log.error(
                     "Notification send failed, key={}, messageId={}, watchlistId={}, productId={}, userId={}, decision=delete_idempotent_key_and_rethrow",
                     idempotentKey,

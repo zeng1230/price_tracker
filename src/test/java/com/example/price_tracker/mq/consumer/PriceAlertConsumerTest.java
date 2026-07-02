@@ -3,6 +3,7 @@ package com.example.price_tracker.mq.consumer;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.service.NotificationService;
 import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.common.ResultCode;
@@ -30,6 +31,9 @@ class PriceAlertConsumerTest {
 
     @Mock
     private RedisCacheService cacheService;
+
+    @Mock
+    private PriceTrackerMetrics metrics;
 
     @InjectMocks
     private PriceAlertConsumer priceAlertConsumer;

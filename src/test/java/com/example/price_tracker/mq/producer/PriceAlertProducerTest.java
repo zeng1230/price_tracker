@@ -3,6 +3,7 @@ package com.example.price_tracker.mq.producer;
 import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.redis.RedisCacheService;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.redis.RedisKeyManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +35,9 @@ class PriceAlertProducerTest {
 
     @Mock
     private RedisCacheService cacheService;
+
+    @Mock
+    private PriceTrackerMetrics metrics;
 
     @InjectMocks
     private PriceAlertProducer producer;
