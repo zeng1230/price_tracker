@@ -2,14 +2,20 @@ package com.example.price_tracker;
 
 import com.example.price_tracker.config.RabbitMQConfig;
 import com.example.price_tracker.entity.Notification;
+import com.example.price_tracker.entity.OutboxEvent;
+import com.example.price_tracker.entity.OutboxEventStatus;
 import com.example.price_tracker.entity.Watchlist;
 import com.example.price_tracker.mapper.NotificationMapper;
+import com.example.price_tracker.mapper.OutboxEventMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.redis.RedisKeyManager;
 import com.example.price_tracker.service.NotificationService;
+import com.example.price_tracker.service.PriceService;
+import com.example.price_tracker.task.OutboxRelay;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,6 +102,9 @@ public class RabbitMQNotificationIT {
     private WatchlistMapper watchlistMapper;
 
     @SpyBean
+    private OutboxEventMapper outboxEventMapper;
+
+    @SpyBean
     private NotificationMapper notificationMapper;
 
     @Autowired
@@ -105,7 +114,16 @@ public class RabbitMQNotificationIT {
     private NotificationService notificationService;
 
     @Autowired
+    private PriceService priceService;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private OutboxRelay outboxRelay;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     private Long watchlistId;
     private Long userId = 1001L;
@@ -115,6 +133,7 @@ public class RabbitMQNotificationIT {
     void setUp() {
         // Clean up database tables physically (bypass logic delete)
         jdbcTemplate.execute("DELETE FROM tb_notification");
+        jdbcTemplate.execute("DELETE FROM tb_outbox_event");
         jdbcTemplate.execute("DELETE FROM tb_watchlist");
 
         // Insert a valid, eligible watchlist record
@@ -176,7 +195,7 @@ public class RabbitMQNotificationIT {
                 });
 
         // Verify Redis idempotent key is created and value is "1"
-        String idempotentKey = RedisKeyManager.notificationIdempotentKey("mq:" + messageId);
+        String idempotentKey = RedisKeyManager.notificationIdempotentKey("mq:" + eventKey);
         String value = cacheService.get(idempotentKey, String.class);
         assertThat(value).isEqualTo("1");
 
@@ -212,6 +231,51 @@ public class RabbitMQNotificationIT {
                     // Check database count of notifications - should still be exactly 1
                     Long count = notificationMapper.selectCount(null);
                     assertThat(count).isEqualTo(1L);
+                });
+    }
+
+    @Test
+    void verifyOutboxRelayPublishesEventAndMarksItSent() throws Exception {
+        String eventKey = "TARGET_PRICE_REACHED:" + userId + ":" + productId + ":" + watchlistId
+                + ":100.00:95.00:" + System.currentTimeMillis();
+
+        PriceAlertMessage message = PriceAlertMessage.builder()
+                .messageId(eventKey)
+                .eventKey(eventKey)
+                .userId(userId)
+                .productId(productId)
+                .watchlistId(watchlistId)
+                .productName("Outbox Product")
+                .currentPrice(new BigDecimal("95.00"))
+                .targetPrice(new BigDecimal("100.00"))
+                .triggeredAt(LocalDateTime.now())
+                .build();
+
+        OutboxEvent outboxEvent = OutboxEvent.builder()
+                .eventKey(eventKey)
+                .eventType("PRICE_ALERT_TARGET_REACHED_V1")
+                .payload(objectMapper.writeValueAsString(message))
+                .status(OutboxEventStatus.PENDING)
+                .attempts(0)
+                .nextRetryAt(LocalDateTime.now().minusSeconds(1))
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        assertThat(outboxEventMapper.insertIgnore(outboxEvent)).isEqualTo(1);
+
+        outboxRelay.relayPendingEvents();
+
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> {
+                    OutboxEvent storedOutboxEvent = outboxEventMapper.selectByEventKey(eventKey);
+                    assertThat(storedOutboxEvent.getStatus()).isEqualTo(OutboxEventStatus.SENT);
+
+                    Notification notification = notificationMapper.selectByEventKey(eventKey);
+                    assertThat(notification).isNotNull();
+                    assertThat(notification.getUserId()).isEqualTo(userId);
+                    assertThat(notification.getProductId()).isEqualTo(productId);
+                    assertThat(notification.getWatchlistId()).isEqualTo(watchlistId);
                 });
     }
 
@@ -270,11 +334,10 @@ public class RabbitMQNotificationIT {
 
     @Test
     void verifyConsumptionFailureEntersDLQ() {
-        String messageId = "fail-msg-" + UUID.randomUUID();
-        String eventKey = "TARGET_PRICE_REACHED:FAIL:" + messageId;
+        String eventKey = "TARGET_PRICE_REACHED:FAIL:fail-msg-" + UUID.randomUUID();
 
         PriceAlertMessage message = PriceAlertMessage.builder()
-                .messageId(messageId)
+                .messageId(eventKey)
                 .eventKey(eventKey)
                 .userId(userId)
                 .productId(productId)
@@ -288,7 +351,7 @@ public class RabbitMQNotificationIT {
         // Stub notificationService.consumePriceAlert to throw an exception when this message is processed
         doThrow(new RuntimeException("Simulated consumption failure"))
                 .when(notificationService)
-                .consumePriceAlert(argThat(msg -> msg != null && messageId.equals(msg.getMessageId())));
+                .consumePriceAlert(argThat(msg -> msg != null && eventKey.equals(msg.getMessageId())));
 
         // Send the message
         priceAlertProducer.send(message);
@@ -302,7 +365,45 @@ public class RabbitMQNotificationIT {
                     assertThat(dlqMessage).isNotNull();
                     assertThat(dlqMessage).isInstanceOf(PriceAlertMessage.class);
                     PriceAlertMessage received = (PriceAlertMessage) dlqMessage;
-                    assertThat(received.getMessageId()).isEqualTo(messageId);
+                    assertThat(received.getMessageId()).isEqualTo(eventKey);
                 });
+    }
+
+    @Test
+    void verifyTransactionRollbackCleansUpRedisIdempotentKey() {
+        // 1. Clean and insert product in DB
+        jdbcTemplate.execute("DELETE FROM tb_product");
+        jdbcTemplate.execute("INSERT INTO tb_product(id, product_name, product_url, platform, current_price, currency, status) " +
+                "VALUES(" + productId + ", 'Test Product', 'http://example.com', 'mock', 50.00, 'USD', 1)");
+
+        // Clear outbox event and price history tables to start clean
+        jdbcTemplate.execute("DELETE FROM tb_outbox_event");
+        jdbcTemplate.execute("DELETE FROM tb_price_history");
+
+        // 2. Stub outboxEventMapper.insertIgnore to throw RuntimeException
+        doThrow(new RuntimeException("Simulated Database Error"))
+                .when(outboxEventMapper)
+                .insertIgnore(any());
+
+        // 3. Trigger price refresh
+        try {
+            priceService.refreshProductPrice(productId);
+        } catch (Exception ex) {
+            assertThat(ex.getMessage()).contains("Simulated Database Error");
+        }
+
+        // 4. Verification:
+        // - Price history has 0 records (rolled back)
+        Integer priceHistoryCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_price_history", Integer.class);
+        assertThat(priceHistoryCount).isEqualTo(0);
+
+        // - Outbox event has 0 records (rolled back)
+        Integer outboxEventCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_outbox_event", Integer.class);
+        assertThat(outboxEventCount).isEqualTo(0);
+
+        // - Redis idempotent key is deleted (due to rollback synchronization)
+        String idempotentKey = RedisKeyManager.notificationIdempotentKey(userId + ":" + productId + ":100.00");
+        String redisVal = cacheService.get(idempotentKey, String.class);
+        assertThat(redisVal).isNull();
     }
 }

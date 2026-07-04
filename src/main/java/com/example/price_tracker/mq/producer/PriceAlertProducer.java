@@ -40,8 +40,15 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
         rabbitTemplate.setReturnsCallback(this);
     }
 
-    public void send(PriceAlertMessage message) {
+    public CorrelationData send(PriceAlertMessage message) {
+        message.setMessageId(message.getEventKey());
         String producerIdempotentKey = buildProducerIdempotentKey(message);
+        CorrelationData correlationData = new PriceAlertCorrelationData(
+                message.getEventKey(),
+                message.getEventKey(),
+                producerIdempotentKey,
+                message.getUserId(),
+                message.getProductId());
         log.info(
                 "Publishing price alert message, messageId={}, eventKey={}, exchange={}, routingKey={}, watchlistId={}, productId={}, userId={}, productName={}, currentPrice={}, targetPrice={}",
                 message.getMessageId(),
@@ -71,12 +78,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
                         rabbitMessage.getMessageProperties().setHeader(HEADER_PRODUCER_IDEMPOTENT_KEY, producerIdempotentKey);
                         return rabbitMessage;
                     },
-                    new PriceAlertCorrelationData(
-                            message.getMessageId(),
-                            message.getEventKey(),
-                            producerIdempotentKey,
-                            message.getUserId(),
-                            message.getProductId())
+                    correlationData
             );
             log.info(
                     "Published price alert message to RabbitTemplate, messageId={}, eventKey={}, routingKey={}, watchlistId={}, productId={}, userId={}, productName={}, currentPrice={}",
@@ -89,6 +91,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
                     message.getProductName(),
                     message.getCurrentPrice()
             );
+            return correlationData;
         } catch (Exception ex) {
             cacheService.delete(producerIdempotentKey);
             metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_FAILED);
@@ -109,6 +112,14 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
         }
     }
 
+    public boolean isReturned(String eventKey) {
+        return returnedMessageIds.contains(eventKey);
+    }
+
+    public void clearReturned(String eventKey) {
+        returnedMessageIds.remove(eventKey);
+    }
+
     @Override
     public void confirm(CorrelationData correlationData, boolean ack, String cause) {
         if (!(correlationData instanceof PriceAlertCorrelationData priceAlertCorrelationData)) {
@@ -118,7 +129,7 @@ public class PriceAlertProducer implements RabbitTemplate.ConfirmCallback, Rabbi
         }
         if (ack) {
             metrics.recordPriceAlertPublish(PriceTrackerMetrics.RESULT_SUCCESS);
-            boolean returned = returnedMessageIds.remove(priceAlertCorrelationData.messageId());
+            boolean returned = returnedMessageIds.contains(priceAlertCorrelationData.messageId());
             if (returned) {
                 log.warn(
                         "Publisher confirm ack received after return; return remains business delivery failure, messageId={}, eventKey={}, productId={}, userId={}",

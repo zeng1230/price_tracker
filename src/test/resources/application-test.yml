@@ -15,3 +15,7 @@ management:
   health:
     rabbit:
       enabled: false
+
+outbox:
+  relay:
+    enabled: false

@@ -2,17 +2,19 @@ package com.example.price_tracker.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.price_tracker.entity.OutboxEvent;
+import com.example.price_tracker.entity.OutboxEventStatus;
 import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.entity.PriceHistory;
 import com.example.price_tracker.entity.Product;
 import com.example.price_tracker.entity.Watchlist;
+import com.example.price_tracker.mapper.OutboxEventMapper;
 import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.mapper.PriceHistoryMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertEventKeyBuilder;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
-import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.example.price_tracker.provider.PriceProvider;
 import com.example.price_tracker.provider.PriceProviderRouter;
 import com.example.price_tracker.provider.PriceQuote;
@@ -20,25 +22,33 @@ import com.example.price_tracker.redis.RedisCacheService;
 import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.redis.RedisKeyManager;
 import com.example.price_tracker.service.PriceService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class PriceServiceImpl implements PriceService {
 
     private static final int ACTIVE_STATUS = 1;
     private static final int NOTIFY_ENABLED = 1;
+    private static final String PRICE_ALERT_EVENT_TYPE = "PRICE_ALERT_TARGET_REACHED_V1";
     private static final BigDecimal DEFAULT_PRICE = new BigDecimal("100.00");
     private static final int DEFAULT_BATCH_SIZE = 100;
     private static final int MAX_REFRESH_RETRIES = 2;
@@ -46,11 +56,34 @@ public class PriceServiceImpl implements PriceService {
     private final ProductMapper productMapper;
     private final PriceHistoryMapper priceHistoryMapper;
     private final WatchlistMapper watchlistMapper;
-    private final PriceAlertProducer priceAlertProducer;
+    private final OutboxEventMapper outboxEventMapper;
     private final PriceProviderRouter priceProviderRouter;
     private final RedisCacheService cacheService;
     private final PriceTrackerMetrics metrics;
+    private final ObjectMapper objectMapper;
+    private final TransactionTemplate transactionTemplate;
     private final ThreadLocal<String> lastResolvedProvider = new ThreadLocal<>();
+
+    public PriceServiceImpl(ProductMapper productMapper,
+                            PriceHistoryMapper priceHistoryMapper,
+                            WatchlistMapper watchlistMapper,
+                            OutboxEventMapper outboxEventMapper,
+                            PriceProviderRouter priceProviderRouter,
+                            RedisCacheService cacheService,
+                            PriceTrackerMetrics metrics,
+                            ObjectMapper objectMapper,
+                            PlatformTransactionManager transactionManager) {
+        this.productMapper = productMapper;
+        this.priceHistoryMapper = priceHistoryMapper;
+        this.watchlistMapper = watchlistMapper;
+        this.outboxEventMapper = outboxEventMapper;
+        this.priceProviderRouter = priceProviderRouter;
+        this.cacheService = cacheService;
+        this.metrics = metrics;
+        this.objectMapper = objectMapper;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     @Value("${notification.idempotent.ttl-minutes:10}")
     private long notificationIdempotentTtlMinutes = 10;
@@ -184,11 +217,11 @@ public class PriceServiceImpl implements PriceService {
         lastResolvedProvider.remove();
         for (int attempt = 0; attempt <= MAX_REFRESH_RETRIES; attempt++) {
             try {
-                int notificationCount = refreshProductPriceInternal(productId);
+                Integer notificationCount = transactionTemplate.execute(status -> refreshProductPriceInternal(productId));
                 String providerCode = lastResolvedProvider.get();
                 metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_SUCCESS, providerCode != null ? providerCode : "unknown");
                 lastResolvedProvider.remove();
-                return notificationCount;
+                return notificationCount != null ? notificationCount : 0;
             } catch (RuntimeException exception) {
                 lastException = exception;
                 log.warn("price refresh attempt failed, productId={}, attempt={}, maxRetries={}, message={}",
@@ -210,15 +243,16 @@ public class PriceServiceImpl implements PriceService {
     }
 
     private PriceAlertMessage buildPriceAlertMessage(Product product, Watchlist watchlist, BigDecimal newPrice, LocalDateTime now) {
+        String eventKey = PriceAlertEventKeyBuilder.buildTargetPriceReachedKey(
+                watchlist.getUserId(),
+                product.getId(),
+                watchlist.getId(),
+                watchlist.getTargetPrice(),
+                newPrice,
+                now);
         return PriceAlertMessage.builder()
-                .messageId(buildMessageId(product.getId(), watchlist.getId()))
-                .eventKey(PriceAlertEventKeyBuilder.buildTargetPriceReachedKey(
-                        watchlist.getUserId(),
-                        product.getId(),
-                        watchlist.getId(),
-                        watchlist.getTargetPrice(),
-                        newPrice,
-                        now))
+                .messageId(eventKey)
+                .eventKey(eventKey)
                 .userId(watchlist.getUserId())
                 .productId(product.getId())
                 .watchlistId(watchlist.getId())
@@ -227,10 +261,6 @@ public class PriceServiceImpl implements PriceService {
                 .productName(product.getProductName())
                 .triggeredAt(now)
                 .build();
-    }
-
-    private String buildMessageId(Long productId, Long watchlistId) {
-        return productId + "-" + watchlistId + "-" + UUID.randomUUID();
     }
 
     private boolean sendAlertIfNotDuplicate(Product product, Watchlist watchlist, BigDecimal newPrice, LocalDateTime now) {
@@ -244,8 +274,54 @@ public class PriceServiceImpl implements PriceService {
             log.info("notification idempotent hit, key={}", idempotentKey);
             return false;
         }
-        priceAlertProducer.send(buildPriceAlertMessage(product, watchlist, newPrice, now));
-        return true;
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    if (status == STATUS_ROLLED_BACK) {
+                        log.info("Transaction rolled back, deleting redis idempotent key={}", idempotentKey);
+                        cacheService.delete(idempotentKey);
+                    }
+                }
+            });
+        } else {
+            log.debug("No transaction active when acquiring idempotent key={}", idempotentKey);
+        }
+
+        PriceAlertMessage message = buildPriceAlertMessage(product, watchlist, newPrice, now);
+        String payload = serializeMessage(message);
+        OutboxEvent event = OutboxEvent.builder()
+                .eventKey(message.getEventKey())
+                .eventType(PRICE_ALERT_EVENT_TYPE)
+                .payload(payload)
+                .status(OutboxEventStatus.PENDING)
+                .attempts(0)
+                .nextRetryAt(now)
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+        try {
+            int inserted = outboxEventMapper.insertIgnore(event);
+            if (inserted == 0) {
+                log.info("outbox event already exists, eventKey={}, decision=idempotent_skip", message.getEventKey());
+                return false;
+            }
+            log.info("created outbox event for price alert, eventKey={}, productId={}, userId={}, watchlistId={}",
+                    message.getEventKey(), message.getProductId(), message.getUserId(), message.getWatchlistId());
+            return true;
+        } catch (DuplicateKeyException exception) {
+            log.info("outbox event unique conflict, eventKey={}, decision=idempotent_skip", message.getEventKey());
+            return false;
+        }
+    }
+
+    private String serializeMessage(PriceAlertMessage message) {
+        try {
+            return objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "failed to serialize price alert outbox payload");
+        }
     }
 
     private Product getActiveProductOrThrow(Long productId) {
