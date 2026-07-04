@@ -19,6 +19,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.math.BigDecimal;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,7 +47,7 @@ class PriceAlertProducerTest {
     void sendPublishesWithCorrelationDataForPublisherConfirm() {
         PriceAlertMessage message = priceAlertMessage();
 
-        producer.send(message);
+        CorrelationData returnedCorrelationData = producer.send(message);
 
         verify(rabbitTemplate).convertAndSend(
                 eq(RabbitMQConfig.PRICE_ALERT_EXCHANGE),
@@ -54,6 +55,34 @@ class PriceAlertProducerTest {
                 eq(message),
                 any(MessagePostProcessor.class),
                 any(CorrelationData.class));
+        assertThat(returnedCorrelationData).isNotNull();
+        assertThat(returnedCorrelationData.getId()).isEqualTo(message.getEventKey());
+    }
+
+    @Test
+    void sendUsesEventKeyAsUnifiedMessageCorrelationAndHeaderId() throws Exception {
+        PriceAlertMessage message = priceAlertMessage();
+
+        CorrelationData returnedCorrelationData = producer.send(message);
+
+        ArgumentCaptor<MessagePostProcessor> processorCaptor = ArgumentCaptor.forClass(MessagePostProcessor.class);
+        ArgumentCaptor<CorrelationData> correlationCaptor = ArgumentCaptor.forClass(CorrelationData.class);
+        verify(rabbitTemplate).convertAndSend(
+                eq(RabbitMQConfig.PRICE_ALERT_EXCHANGE),
+                eq(RabbitMQConfig.PRICE_ALERT_ROUTING_KEY),
+                eq(message),
+                processorCaptor.capture(),
+                correlationCaptor.capture());
+        org.springframework.amqp.core.Message amqpMessage = new org.springframework.amqp.core.Message(
+                new byte[0], new MessageProperties());
+        processorCaptor.getValue().postProcessMessage(amqpMessage);
+
+        assertThat(message.getMessageId()).isEqualTo(message.getEventKey());
+        assertThat(correlationCaptor.getValue().getId()).isEqualTo(message.getEventKey());
+        assertThat(returnedCorrelationData.getId()).isEqualTo(message.getEventKey());
+        assertThat(amqpMessage.getMessageProperties().getHeaders())
+                .containsEntry("X-Price-Alert-Message-Id", message.getEventKey())
+                .containsEntry("X-Price-Alert-Event-Key", message.getEventKey());
     }
 
     @Test
@@ -128,15 +157,19 @@ class PriceAlertProducerTest {
                 "NO_ROUTE",
                 RabbitMQConfig.PRICE_ALERT_EXCHANGE,
                 "bad.routing"));
+        assertThat(producer.isReturned(message.getEventKey())).isTrue();
         producer.confirm(correlationCaptor.getValue(), true, null);
+        assertThat(producer.isReturned(message.getEventKey())).isTrue();
+        producer.clearReturned(message.getEventKey());
+        assertThat(producer.isReturned(message.getEventKey())).isFalse();
 
         verify(cacheService).delete(RedisKeyManager.notificationIdempotentKey("99:1:80.00"));
     }
 
     private PriceAlertMessage priceAlertMessage() {
         return PriceAlertMessage.builder()
-                .messageId("msg-001")
                 .eventKey("TARGET_PRICE_REACHED:99:1:5:80.00:79.00:1782468930000")
+                .messageId("TARGET_PRICE_REACHED:99:1:5:80.00:79.00:1782468930000")
                 .userId(99L)
                 .productId(1L)
                 .watchlistId(5L)

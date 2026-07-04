@@ -93,3 +93,13 @@ notification:
 price-tracker:
   price-refresh:
     batch-size: ${PRICE_REFRESH_BATCH_SIZE:100}
+
+outbox:
+  relay:
+    enabled: ${OUTBOX_RELAY_ENABLED:true}
+    fixed-delay-ms: ${OUTBOX_RELAY_FIXED_DELAY_MS:5000}
+    batch-size: ${OUTBOX_RELAY_BATCH_SIZE:20}
+    max-attempts: ${OUTBOX_RELAY_MAX_ATTEMPTS:5}
+    confirm-timeout-ms: ${OUTBOX_RELAY_CONFIRM_TIMEOUT_MS:5000}
+    initial-backoff-seconds: ${OUTBOX_RELAY_INITIAL_BACKOFF_SECONDS:5}
+    max-backoff-seconds: ${OUTBOX_RELAY_MAX_BACKOFF_SECONDS:300}

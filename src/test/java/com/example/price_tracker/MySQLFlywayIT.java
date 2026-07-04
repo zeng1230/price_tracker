@@ -45,10 +45,13 @@ class MySQLFlywayIT {
         assertThat(tableExists("tb_price_history")).isTrue();
         assertThat(tableExists("tb_watchlist")).isTrue();
         assertThat(tableExists("tb_notification")).isTrue();
+        assertThat(tableExists("tb_outbox_event")).isTrue();
 
         // 3. Verify key indexes exist
         assertThat(indexExists("tb_notification", "ux_notification_event_key")).isTrue();
         assertThat(indexExists("tb_price_history", "idx_price_history_product_captured_at")).isTrue();
+        assertThat(indexExists("tb_outbox_event", "ux_outbox_event_key")).isTrue();
+        assertThat(indexExists("tb_outbox_event", "idx_outbox_event_status_retry_id")).isTrue();
     }
 
     private boolean tableExists(String tableName) {
