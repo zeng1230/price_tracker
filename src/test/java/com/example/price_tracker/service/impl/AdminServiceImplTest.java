@@ -7,6 +7,8 @@ import com.example.price_tracker.entity.Product;
 import com.example.price_tracker.entity.User;
 import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.BusinessException;
+import com.example.price_tracker.mapper.NotificationDeliveryMapper;
+import com.example.price_tracker.mapper.OutboxEventMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.UserMapper;
 import com.example.price_tracker.redis.RedisCacheService;
@@ -25,6 +27,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +40,12 @@ class AdminServiceImplTest {
 
     @Mock
     private ProductMapper productMapper;
+
+    @Mock
+    private OutboxEventMapper outboxEventMapper;
+
+    @Mock
+    private NotificationDeliveryMapper notificationDeliveryMapper;
 
     @Mock
     private UserService userService;
@@ -98,6 +107,24 @@ class AdminServiceImplTest {
 
         assertEquals(ResultCode.NOT_FOUND.getCode(), exception.getCode());
         verify(productMapper, never()).updateStatusByAdmin(any(), any());
+    }
+
+    @Test
+    void retryDeadOutboxRejectsMissingDeadRecord() {
+        when(outboxEventMapper.resetDeadForRetry(eq(8L), any())).thenReturn(0);
+
+        BusinessException exception = assertThrows(BusinessException.class, () -> adminService.retryDeadOutboxEvent(8L));
+
+        assertEquals(ResultCode.NOT_FOUND.getCode(), exception.getCode());
+    }
+
+    @Test
+    void retryDeadNotificationDeliveryRejectsMissingDeadRecord() {
+        when(notificationDeliveryMapper.resetDeadForRetry(eq(9L), any())).thenReturn(0);
+
+        BusinessException exception = assertThrows(BusinessException.class, () -> adminService.retryDeadNotificationDelivery(9L));
+
+        assertEquals(ResultCode.NOT_FOUND.getCode(), exception.getCode());
     }
 
     @SafeVarargs

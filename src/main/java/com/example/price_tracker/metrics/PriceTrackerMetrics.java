@@ -15,6 +15,8 @@ public class PriceTrackerMetrics {
     public static final String METRIC_PRICE_ALERT_PUBLISH = "price_alert_publish_total";
     public static final String METRIC_PRICE_ALERT_CONSUME = "price_alert_consume_total";
     public static final String METRIC_RATE_LIMIT_BLOCK = "rate_limit_block_total";
+    public static final String METRIC_OUTBOX_RELAY = "outbox_relay_total";
+    public static final String METRIC_NOTIFICATION_DELIVERY = "notification_delivery_total";
 
     // Tag keys
     public static final String TAG_RESULT = "result";
@@ -67,6 +69,18 @@ public class PriceTrackerMetrics {
     public void recordRateLimitBlock(String api) {
         if (registry != null) {
             registry.counter(METRIC_RATE_LIMIT_BLOCK, TAG_API, api).increment();
+        }
+    }
+
+    public void recordOutboxRelay(String result) {
+        if (registry != null) {
+            registry.counter(METRIC_OUTBOX_RELAY, TAG_RESULT, result).increment();
+        }
+    }
+
+    public void recordNotificationDelivery(String result) {
+        if (registry != null) {
+            registry.counter(METRIC_NOTIFICATION_DELIVERY, TAG_RESULT, result).increment();
         }
     }
 }

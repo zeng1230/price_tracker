@@ -3,9 +3,13 @@ package com.example.price_tracker.service.impl;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.price_tracker.common.PageResult;
 import com.example.price_tracker.common.ResultCode;
+import com.example.price_tracker.entity.NotificationDelivery;
+import com.example.price_tracker.entity.OutboxEvent;
 import com.example.price_tracker.entity.Product;
 import com.example.price_tracker.entity.User;
 import com.example.price_tracker.exception.BusinessException;
+import com.example.price_tracker.mapper.NotificationDeliveryMapper;
+import com.example.price_tracker.mapper.OutboxEventMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.UserMapper;
 import com.example.price_tracker.redis.RedisCacheService;
@@ -17,6 +21,7 @@ import com.example.price_tracker.vo.UserVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -25,6 +30,8 @@ public class AdminServiceImpl implements AdminService {
 
     private final UserMapper userMapper;
     private final ProductMapper productMapper;
+    private final OutboxEventMapper outboxEventMapper;
+    private final NotificationDeliveryMapper notificationDeliveryMapper;
     private final UserService userService;
     private final RedisCacheService cacheService;
 
@@ -58,8 +65,39 @@ public class AdminServiceImpl implements AdminService {
         clearProductCache(productId);
     }
 
+    @Override
+    public List<OutboxEvent> listDeadOutboxEvents(int limit) {
+        return outboxEventMapper.selectDeadEvents(resolveOpsLimit(limit));
+    }
+
+    @Override
+    public void retryDeadOutboxEvent(Long id) {
+        if (outboxEventMapper.resetDeadForRetry(id, LocalDateTime.now()) != 1) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "dead outbox event not found");
+        }
+    }
+
+    @Override
+    public List<NotificationDelivery> listDeadNotificationDeliveries(int limit) {
+        return notificationDeliveryMapper.selectDeadDeliveries(resolveOpsLimit(limit));
+    }
+
+    @Override
+    public void retryDeadNotificationDelivery(Long id) {
+        if (notificationDeliveryMapper.resetDeadForRetry(id, LocalDateTime.now()) != 1) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "dead notification delivery not found");
+        }
+    }
+
     private String normalizeKeyword(String keyword) {
         return keyword == null || keyword.isBlank() ? null : keyword.trim();
+    }
+
+    private int resolveOpsLimit(int limit) {
+        if (limit <= 0) {
+            return 50;
+        }
+        return Math.min(limit, 200);
     }
 
     private ProductPageVo toProductPageVo(Product product) {

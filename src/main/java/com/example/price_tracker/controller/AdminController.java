@@ -4,6 +4,8 @@ import com.example.price_tracker.annotation.AdminRequired;
 import com.example.price_tracker.common.PageResult;
 import com.example.price_tracker.common.Result;
 import com.example.price_tracker.dto.ProductStatusUpdateDto;
+import com.example.price_tracker.entity.NotificationDelivery;
+import com.example.price_tracker.entity.OutboxEvent;
 import com.example.price_tracker.service.AdminService;
 import com.example.price_tracker.service.PriceService;
 import com.example.price_tracker.vo.ProductPageVo;
@@ -23,6 +25,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @Tag(name = "Administration", description = "Administrative operations (Requires JWT and ADMIN role)")
 @Validated
@@ -67,6 +71,36 @@ public class AdminController {
     public Result<Void> refreshProductPrice(
             @Parameter(description = "Product ID") @PathVariable @Min(value = 1, message = "productId must be greater than 0") Long productId) {
         priceService.refreshProductPrice(productId);
+        return Result.success();
+    }
+
+    @Operation(summary = "List DEAD Outbox Events", description = "List outbox events that require operator recovery")
+    @GetMapping("/outbox/dead")
+    public Result<List<OutboxEvent>> deadOutboxEvents(
+            @RequestParam(defaultValue = "50") @Min(value = 1, message = "limit must be greater than 0") Integer limit) {
+        return Result.success(adminService.listDeadOutboxEvents(limit));
+    }
+
+    @Operation(summary = "Retry DEAD Outbox Event", description = "Reset a DEAD outbox event to PENDING")
+    @PostMapping("/outbox/{id}/retry")
+    public Result<Void> retryDeadOutboxEvent(
+            @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
+        adminService.retryDeadOutboxEvent(id);
+        return Result.success();
+    }
+
+    @Operation(summary = "List DEAD Notification Deliveries", description = "List external notification deliveries that require operator recovery")
+    @GetMapping("/notification-deliveries/dead")
+    public Result<List<NotificationDelivery>> deadNotificationDeliveries(
+            @RequestParam(defaultValue = "50") @Min(value = 1, message = "limit must be greater than 0") Integer limit) {
+        return Result.success(adminService.listDeadNotificationDeliveries(limit));
+    }
+
+    @Operation(summary = "Retry DEAD Notification Delivery", description = "Reset a DEAD notification delivery to PENDING")
+    @PostMapping("/notification-deliveries/{id}/retry")
+    public Result<Void> retryDeadNotificationDelivery(
+            @PathVariable @Min(value = 1, message = "id must be greater than 0") Long id) {
+        adminService.retryDeadNotificationDelivery(id);
         return Result.success();
     }
 }

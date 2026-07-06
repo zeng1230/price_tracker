@@ -2,6 +2,8 @@ package com.example.price_tracker.controller;
 
 import com.example.price_tracker.common.PageResult;
 import com.example.price_tracker.config.JwtProperties;
+import com.example.price_tracker.entity.NotificationDelivery;
+import com.example.price_tracker.entity.OutboxEvent;
 import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.GlobalExceptionHandler;
 import com.example.price_tracker.interceptor.AuthInterceptor;
@@ -104,6 +106,28 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.code").value(200));
 
         verify(priceService).refreshProductPrice(3L);
+    }
+
+    @Test
+    void adminCanQueryAndRetryDeadOperationalTasks() throws Exception {
+        when(adminService.listDeadOutboxEvents(50)).thenReturn(List.of(OutboxEvent.builder().id(10L).eventKey("outbox-event").build()));
+        when(adminService.listDeadNotificationDeliveries(50)).thenReturn(List.of(NotificationDelivery.builder().id(20L).eventKey("delivery-event").build()));
+
+        mockMvc.perform(get("/api/admin/outbox/dead").header("Authorization", bearer(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].eventKey").value("outbox-event"));
+        mockMvc.perform(post("/api/admin/outbox/10/retry").header("Authorization", bearer(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        mockMvc.perform(get("/api/admin/notification-deliveries/dead").header("Authorization", bearer(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].eventKey").value("delivery-event"));
+        mockMvc.perform(post("/api/admin/notification-deliveries/20/retry").header("Authorization", bearer(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(adminService).retryDeadOutboxEvent(10L);
+        verify(adminService).retryDeadNotificationDelivery(20L);
     }
 
     private String bearer(UserRole role) {
