@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,5 +34,19 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginVo> login(@Valid @RequestBody LoginDto loginDto) {
         return Result.success(authService.login(loginDto));
+    }
+
+    @Operation(summary = "User Logout", description = "Revoke the current JWT access token")
+    @PostMapping("/logout")
+    public Result<Void> logout(@RequestHeader("Authorization") String authorizationHeader) {
+        authService.logout(resolveBearerToken(authorizationHeader));
+        return Result.success();
+    }
+
+    private String resolveBearerToken(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return "";
+        }
+        return authorizationHeader.substring(7).trim();
     }
 }

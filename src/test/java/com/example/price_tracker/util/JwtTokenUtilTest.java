@@ -6,6 +6,7 @@ import com.example.price_tracker.context.UserContext;
 import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.interceptor.AuthInterceptor;
+import com.example.price_tracker.service.JwtTokenBlacklistService;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class JwtTokenUtilTest {
 
@@ -44,6 +46,25 @@ class JwtTokenUtilTest {
         assertEquals(7L, payload.userId());
         assertEquals("alice", payload.username());
         assertEquals(UserRole.ADMIN, payload.role());
+        assertTrue(payload.jti() != null && !payload.jti().isBlank());
+    }
+
+    @Test
+    void interceptorRejectsBlacklistedToken() {
+        String token = jwtTokenUtil.generateAccessToken(9L, "bob", UserRole.USER);
+        JwtTokenBlacklistService blacklistService = mock(JwtTokenBlacklistService.class);
+        when(blacklistService.isBlacklisted(token)).thenReturn(true);
+        AuthInterceptor interceptor = new AuthInterceptor(jwtTokenUtil);
+        interceptor.setJwtTokenBlacklistService(blacklistService);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer " + token);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> interceptor.preHandle(request, new MockHttpServletResponse(), mock())
+        );
+
+        assertEquals(401, exception.getCode());
     }
 
     @Test

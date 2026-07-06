@@ -1,0 +1,42 @@
+spring:
+  datasource:
+    url: ${MYSQL_URL}
+    username: ${MYSQL_USERNAME}
+    password: ${MYSQL_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+  rabbitmq:
+    host: ${RABBITMQ_HOST}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+
+jwt:
+  secret: ${JWT_SECRET}
+  access-token-expire-minutes: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:120}
+  refresh-token-expire-days: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:7}
+  issuer: ${JWT_ISSUER:price-tracker}
+
+price-provider:
+  serpapi:
+    enabled: ${SERPAPI_ENABLED:false}
+    api-key: ${SERPAPI_API_KEY:}
+    base-url: ${SERPAPI_BASE_URL:https://serpapi.com/search.json}
+    timeout-ms: ${SERPAPI_TIMEOUT_MS:3000}
+
+notification:
+  webhook:
+    enabled: ${WEBHOOK_ENABLED:false}
+    url: ${WEBHOOK_URL:}
+    secret: ${WEBHOOK_SECRET:}

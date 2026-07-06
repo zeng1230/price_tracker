@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.UUID;
 
 import static com.example.price_tracker.common.ResultCode.UNAUTHORIZED;
 
@@ -34,6 +35,7 @@ public class JwtTokenUtil {
         return Jwts.builder()
                 .issuer(jwtProperties.getIssuer())
                 .subject(username)
+                .id(UUID.randomUUID().toString())
                 .claim("userId", userId)
                 .claim("role", role.name())
                 .issuedAt(Date.from(now))
@@ -53,8 +55,11 @@ public class JwtTokenUtil {
             if (userId == null) {
                 throw new BusinessException(UNAUTHORIZED, "token userId is missing");
             }
+            if (StringUtils.isBlank(claims.getId())) {
+                throw new BusinessException(UNAUTHORIZED, "token jti is missing");
+            }
             UserRole role = UserRole.parse(claims.get("role", String.class));
-            return new TokenPayload(userId, claims.getSubject(), role);
+            return new TokenPayload(userId, claims.getSubject(), role, claims.getId(), claims.getExpiration().toInstant());
         } catch (JwtException | IllegalArgumentException exception) {
             throw new BusinessException(UNAUTHORIZED, "invalid token");
         }
@@ -75,6 +80,6 @@ public class JwtTokenUtil {
         return Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
     }
 
-    public record TokenPayload(Long userId, String username, UserRole role) {
+    public record TokenPayload(Long userId, String username, UserRole role, String jti, Instant expiresAt) {
     }
 }

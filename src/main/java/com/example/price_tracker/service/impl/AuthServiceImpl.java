@@ -9,6 +9,7 @@ import com.example.price_tracker.entity.UserRole;
 import com.example.price_tracker.exception.BusinessException;
 import com.example.price_tracker.mapper.UserMapper;
 import com.example.price_tracker.service.AuthService;
+import com.example.price_tracker.service.JwtTokenBlacklistService;
 import com.example.price_tracker.service.UserService;
 import com.example.price_tracker.util.JwtTokenUtil;
 import com.example.price_tracker.vo.LoginVo;
@@ -26,6 +27,7 @@ public class AuthServiceImpl implements AuthService {
     private final UserService userService;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenUtil jwtTokenUtil;
+    private final JwtTokenBlacklistService jwtTokenBlacklistService;
 
     @Override
     public UserVo register(RegisterDto registerDto) {
@@ -63,6 +65,11 @@ public class AuthServiceImpl implements AuthService {
         }
         String token = jwtTokenUtil.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
         return LoginVo.builder().token(token).build();
+    }
+
+    @Override
+    public void logout(String token) {
+        jwtTokenBlacklistService.blacklist(token);
     }
 
     private String normalize(String value) {

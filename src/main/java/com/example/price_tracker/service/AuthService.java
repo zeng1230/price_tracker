@@ -10,4 +10,6 @@ public interface AuthService {
     UserVo register(RegisterDto registerDto);
 
     LoginVo login(LoginDto loginDto);
+
+    void logout(String token);
 }
