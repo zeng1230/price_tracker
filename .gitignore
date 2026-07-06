@@ -69,3 +69,4 @@ out/
 
 .gitignore
 docs/
+.docker-java.properties
