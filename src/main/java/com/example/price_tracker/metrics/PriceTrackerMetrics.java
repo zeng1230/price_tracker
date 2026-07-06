@@ -15,6 +15,7 @@ public class PriceTrackerMetrics {
     public static final String METRIC_PRICE_ALERT_PUBLISH = "price_alert_publish_total";
     public static final String METRIC_PRICE_ALERT_CONSUME = "price_alert_consume_total";
     public static final String METRIC_RATE_LIMIT_BLOCK = "rate_limit_block_total";
+    public static final String METRIC_PRICE_PROVIDER_FAILURE = "price_provider_failure_total";
     public static final String METRIC_OUTBOX_RELAY = "outbox_relay_total";
     public static final String METRIC_NOTIFICATION_DELIVERY = "notification_delivery_total";
 
@@ -22,6 +23,7 @@ public class PriceTrackerMetrics {
     public static final String TAG_RESULT = "result";
     public static final String TAG_PROVIDER = "provider";
     public static final String TAG_API = "api";
+    public static final String TAG_FAILURE_TYPE = "failure_type";
 
     // Tag values for RESULT
     public static final String RESULT_SUCCESS = "success";
@@ -81,6 +83,12 @@ public class PriceTrackerMetrics {
     public void recordNotificationDelivery(String result) {
         if (registry != null) {
             registry.counter(METRIC_NOTIFICATION_DELIVERY, TAG_RESULT, result).increment();
+        }
+    }
+
+    public void recordPriceProviderFailure(String provider, String failureType) {
+        if (registry != null) {
+            registry.counter(METRIC_PRICE_PROVIDER_FAILURE, TAG_PROVIDER, provider, TAG_FAILURE_TYPE, failureType).increment();
         }
     }
 }

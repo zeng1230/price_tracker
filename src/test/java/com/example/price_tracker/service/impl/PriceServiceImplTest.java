@@ -13,6 +13,8 @@ import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.example.price_tracker.provider.PriceProvider;
+import com.example.price_tracker.provider.PriceProviderException;
+import com.example.price_tracker.provider.PriceProviderFailureType;
 import com.example.price_tracker.provider.PriceProviderRouter;
 import com.example.price_tracker.provider.PriceQuote;
 import com.example.price_tracker.metrics.PriceTrackerMetrics;
@@ -39,6 +41,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -312,5 +315,37 @@ class PriceServiceImplTest {
                 CAPTURED_AT,
                 null,
                 "Laptop"));
+    }
+
+    @Test
+    void refreshProductPriceThrowsPriceProviderExceptionAndRecordsSpecificMetrics() {
+        when(productMapper.selectById(1L)).thenReturn(activeProduct());
+        when(priceProviderRouter.route(any(Product.class))).thenReturn(priceProvider);
+        when(priceProvider.providerCode()).thenReturn("SERPAPI");
+        when(priceProvider.fetchPrice(any(Product.class))).thenThrow(
+                new PriceProviderException(PriceProviderFailureType.RATE_LIMITED, true, "serpapi rate limited"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> priceService.refreshProductPrice(1L))
+                .isInstanceOf(PriceProviderException.class);
+
+        verify(metrics).recordPriceProviderFailure("SERPAPI", "RATE_LIMITED");
+        verify(metrics).recordPriceProviderFetch(eq("SERPAPI"), eq(PriceTrackerMetrics.RESULT_FAILED), any(java.time.Duration.class));
+        verify(metrics).recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_FAILED, "SERPAPI");
+    }
+
+    @Test
+    void refreshActiveProductsAbortsImmediatelyOnNonRetryableProviderException() {
+        ReflectionTestUtils.setField(priceService, "priceRefreshBatchSize", 1);
+        when(productMapper.selectPage(any(Page.class), any())).thenReturn(activeProductPage(activeProduct(1L)));
+        when(productMapper.selectById(1L)).thenReturn(activeProduct(1L));
+        when(priceProviderRouter.route(any(Product.class))).thenReturn(priceProvider);
+        when(priceProvider.providerCode()).thenReturn("SERPAPI");
+        when(priceProvider.fetchPrice(any(Product.class))).thenThrow(
+                new PriceProviderException(PriceProviderFailureType.AUTHENTICATION_FAILED, false, "invalid key"));
+
+        priceService.refreshActiveProducts();
+
+        // Should only query the product once and abort retrying because it's not retryable
+        verify(productMapper, times(1)).selectById(1L);
     }
 }

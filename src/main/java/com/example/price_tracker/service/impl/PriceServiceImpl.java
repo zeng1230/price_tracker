@@ -16,6 +16,7 @@ import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertEventKeyBuilder;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.provider.PriceProvider;
+import com.example.price_tracker.provider.PriceProviderException;
 import com.example.price_tracker.provider.PriceProviderRouter;
 import com.example.price_tracker.provider.PriceQuote;
 import com.example.price_tracker.redis.RedisCacheService;
@@ -155,6 +156,18 @@ public class PriceServiceImpl implements PriceService {
             }
             metrics.recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_SUCCESS, priceProvider.providerCode());
             return notificationTriggeredCount;
+        } catch (PriceProviderException exception) {
+            long durationNanos = System.nanoTime() - startNanos;
+            String providerCode = (priceProvider != null) ? priceProvider.providerCode() : "unknown";
+            if (priceProvider != null) {
+                lastResolvedProvider.set(providerCode);
+                metrics.recordPriceProviderFetch(providerCode, PriceTrackerMetrics.RESULT_FAILED, Duration.ofNanos(durationNanos));
+                metrics.recordPriceProviderFailure(providerCode, exception.getFailureType().name());
+            }
+            metrics.recordPriceRefreshAttempt(PriceTrackerMetrics.RESULT_FAILED, providerCode);
+            log.warn("price provider fetch failed, productId={}, providerCode={}, failureType={}, retryable={}, error={}",
+                    productId, providerCode, exception.getFailureType(), exception.isRetryable(), exception.getMessage());
+            throw exception;
         } catch (RuntimeException exception) {
             long durationNanos = System.nanoTime() - startNanos;
             String providerCode = (priceProvider != null) ? priceProvider.providerCode() : "unknown";
@@ -222,6 +235,16 @@ public class PriceServiceImpl implements PriceService {
                 metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_SUCCESS, providerCode != null ? providerCode : "unknown");
                 lastResolvedProvider.remove();
                 return notificationCount != null ? notificationCount : 0;
+            } catch (PriceProviderException exception) {
+                lastException = exception;
+                String providerCode = lastResolvedProvider.get();
+                log.warn("price refresh attempt failed due to provider error, productId={}, attempt={}, maxRetries={}, failureType={}, retryable={}, message={}",
+                        productId, attempt + 1, MAX_REFRESH_RETRIES, exception.getFailureType(), exception.isRetryable(), exception.getMessage());
+                if (!exception.isRetryable()) {
+                    metrics.recordPriceRefreshFinal(PriceTrackerMetrics.RESULT_FAILED, providerCode != null ? providerCode : "unknown");
+                    lastResolvedProvider.remove();
+                    throw exception;
+                }
             } catch (RuntimeException exception) {
                 lastException = exception;
                 log.warn("price refresh attempt failed, productId={}, attempt={}, maxRetries={}, message={}",
