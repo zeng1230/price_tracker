@@ -6,12 +6,15 @@ import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.context.UserContext;
 import com.example.price_tracker.dto.NotificationQueryDto;
 import com.example.price_tracker.entity.Notification;
+import com.example.price_tracker.entity.NotificationDelivery;
 import com.example.price_tracker.entity.Watchlist;
 import com.example.price_tracker.exception.BusinessException;
+import com.example.price_tracker.mapper.NotificationDeliveryMapper;
 import com.example.price_tracker.mapper.NotificationMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,8 +22,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatcher;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 
@@ -43,6 +48,12 @@ class NotificationServiceImplTest {
 
     @Mock
     private WatchlistMapper watchlistMapper;
+
+    @Mock
+    private NotificationDeliveryMapper notificationDeliveryMapper;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @InjectMocks
     private NotificationServiceImpl notificationService;
@@ -94,6 +105,24 @@ class NotificationServiceImplTest {
     }
 
     @Test
+    void consumePriceAlertCreatesWebhookDeliveryWhenWebhookEnabled() {
+        ReflectionTestUtils.setField(notificationService, "webhookEnabled", true);
+        when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
+        when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithoutDedupPrice());
+
+        notificationService.consumePriceAlert(triggeredMessage());
+
+        verify(notificationDeliveryMapper).insertIgnore(argThat(delivery ->
+                eventKey().equals(delivery.getEventKey())
+                        && "WEBHOOK".equals(delivery.getChannel())
+                        && delivery.getPayload().contains("\"eventKey\"")
+                        && delivery.getPayload().contains(eventKey())
+                        && delivery.getStatus() != null
+                        && delivery.getAttempts() == 0
+                        && delivery.getNextRetryAt() != null));
+    }
+
+    @Test
     void consumePriceAlertSkipsDuplicatePriceNotification() {
         when(notificationMapper.selectByEventKey(eventKey())).thenReturn(null);
         when(watchlistMapper.selectById(5L)).thenReturn(activeWatchlistWithDedupPrice());
@@ -101,6 +130,7 @@ class NotificationServiceImplTest {
         notificationService.consumePriceAlert(triggeredMessage());
 
         verify(notificationMapper, never()).insert(any(Notification.class));
+        verify(notificationDeliveryMapper, never()).insertIgnore(any(NotificationDelivery.class));
         verify(watchlistMapper, never()).updateById(any(Watchlist.class));
     }
 

@@ -6,17 +6,23 @@ import com.example.price_tracker.common.ResultCode;
 import com.example.price_tracker.context.UserContext;
 import com.example.price_tracker.dto.NotificationQueryDto;
 import com.example.price_tracker.entity.Notification;
+import com.example.price_tracker.entity.NotificationDelivery;
+import com.example.price_tracker.entity.NotificationDeliveryStatus;
 import com.example.price_tracker.entity.Product;
 import com.example.price_tracker.entity.Watchlist;
 import com.example.price_tracker.exception.BusinessException;
+import com.example.price_tracker.mapper.NotificationDeliveryMapper;
 import com.example.price_tracker.mapper.NotificationMapper;
 import com.example.price_tracker.mapper.ProductMapper;
 import com.example.price_tracker.mapper.WatchlistMapper;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.service.NotificationService;
 import com.example.price_tracker.vo.NotificationVo;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -40,10 +46,16 @@ public class NotificationServiceImpl implements NotificationService {
     private static final int UNREAD = 0;
     private static final int SENT = 1;
     private static final String TARGET_PRICE_REACHED = "TARGET_PRICE_REACHED";
+    private static final String WEBHOOK_CHANNEL = "WEBHOOK";
 
     private final NotificationMapper notificationMapper;
     private final ProductMapper productMapper;
     private final WatchlistMapper watchlistMapper;
+    private final NotificationDeliveryMapper notificationDeliveryMapper;
+    private final ObjectMapper objectMapper;
+
+    @Value("${notification.webhook.enabled:false}")
+    private boolean webhookEnabled = false;
 
     @Override
     public PageResult<NotificationVo> pageMyNotifications(NotificationQueryDto queryDto) {
@@ -123,6 +135,7 @@ public class NotificationServiceImpl implements NotificationService {
         watchlist.setLastNotifiedPrice(message.getCurrentPrice());
         watchlist.setUpdatedAt(now);
         watchlistMapper.updateById(watchlist);
+        createWebhookDeliveryIfEnabled(message, now);
         log.info(
                 "Created price alert notification, watchlistId={}, productId={}, userId={}",
                 message.getWatchlistId(),
@@ -153,6 +166,31 @@ public class NotificationServiceImpl implements NotificationService {
                 .createdAt(notification.getCreatedAt())
                 .sentAt(notification.getSentAt())
                 .build();
+    }
+
+    private void createWebhookDeliveryIfEnabled(PriceAlertMessage message, LocalDateTime now) {
+        if (!webhookEnabled) {
+            return;
+        }
+        NotificationDelivery delivery = NotificationDelivery.builder()
+                .eventKey(message.getEventKey())
+                .channel(WEBHOOK_CHANNEL)
+                .payload(serializeWebhookPayload(message))
+                .status(NotificationDeliveryStatus.PENDING)
+                .attempts(0)
+                .nextRetryAt(now)
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+        notificationDeliveryMapper.insertIgnore(delivery);
+    }
+
+    private String serializeWebhookPayload(PriceAlertMessage message) {
+        try {
+            return objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "failed to serialize webhook delivery payload");
+        }
     }
 
     private Long requireCurrentUserId() {
