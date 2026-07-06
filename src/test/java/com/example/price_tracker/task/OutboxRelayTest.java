@@ -3,6 +3,7 @@ package com.example.price_tracker.task;
 import com.example.price_tracker.entity.OutboxEvent;
 import com.example.price_tracker.entity.OutboxEventStatus;
 import com.example.price_tracker.mapper.OutboxEventMapper;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,25 +37,33 @@ class OutboxRelayTest {
     @Mock
     private PriceAlertProducer priceAlertProducer;
 
+    @Mock
+    private PriceTrackerMetrics metrics;
+
     private OutboxRelay outboxRelay;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper().findAndRegisterModules();
-        outboxRelay = new OutboxRelay(outboxEventMapper, priceAlertProducer, objectMapper);
+        outboxRelay = new OutboxRelay(outboxEventMapper, priceAlertProducer, objectMapper, metrics);
         ReflectionTestUtils.setField(outboxRelay, "batchSize", 20);
         ReflectionTestUtils.setField(outboxRelay, "maxAttempts", 5);
         ReflectionTestUtils.setField(outboxRelay, "confirmTimeoutMs", 100L);
         ReflectionTestUtils.setField(outboxRelay, "initialBackoffSeconds", 5L);
         ReflectionTestUtils.setField(outboxRelay, "maxBackoffSeconds", 300L);
+        ReflectionTestUtils.setField(outboxRelay, "claimLeaseSeconds", 120L);
+        ReflectionTestUtils.setField(outboxRelay, "relayInstanceId", "test-outbox-relay");
     }
 
     @Test
     void relayMarksEventSentWhenConfirmAckAndMessageIsNotReturned() throws Exception {
         OutboxEvent event = outboxEvent(1, 0, objectMapper.writeValueAsString(priceAlertMessage()));
         CorrelationData correlationData = ackCorrelationData(event.getEventKey());
-        when(outboxEventMapper.selectReadyEvents(any(), any(), eq(20))).thenReturn(List.of(event));
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(outboxEventMapper.selectClaimedReadyEvents(eq("test-outbox-relay"), any(LocalDateTime.class), eq(20)))
+                .thenReturn(List.of(event));
         when(priceAlertProducer.send(any(PriceAlertMessage.class))).thenReturn(correlationData);
         when(priceAlertProducer.isReturned(event.getEventKey())).thenReturn(false);
 
@@ -67,7 +76,10 @@ class OutboxRelayTest {
     @Test
     void relayMarksReturnedEventDeadEvenWhenConfirmAckArrives() throws Exception {
         OutboxEvent event = outboxEvent(2, 0, objectMapper.writeValueAsString(priceAlertMessage()));
-        when(outboxEventMapper.selectReadyEvents(any(), any(), eq(20))).thenReturn(List.of(event));
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(outboxEventMapper.selectClaimedReadyEvents(eq("test-outbox-relay"), any(LocalDateTime.class), eq(20)))
+                .thenReturn(List.of(event));
         when(priceAlertProducer.send(any(PriceAlertMessage.class))).thenReturn(ackCorrelationData(event.getEventKey()));
         when(priceAlertProducer.isReturned(event.getEventKey())).thenReturn(true);
 
@@ -80,7 +92,10 @@ class OutboxRelayTest {
     @Test
     void relayMarksInvalidPayloadDeadWithoutPublishing() {
         OutboxEvent event = outboxEvent(3, 0, "{not-json");
-        when(outboxEventMapper.selectReadyEvents(any(), any(), eq(20))).thenReturn(List.of(event));
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(outboxEventMapper.selectClaimedReadyEvents(eq("test-outbox-relay"), any(LocalDateTime.class), eq(20)))
+                .thenReturn(List.of(event));
 
         outboxRelay.relayPendingEvents();
 
@@ -91,7 +106,10 @@ class OutboxRelayTest {
     @Test
     void relayMarksNackRetryableWithIncrementedAttemptsAndBackoff() throws Exception {
         OutboxEvent event = outboxEvent(4, 1, objectMapper.writeValueAsString(priceAlertMessage()));
-        when(outboxEventMapper.selectReadyEvents(any(), any(), eq(20))).thenReturn(List.of(event));
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(outboxEventMapper.selectClaimedReadyEvents(eq("test-outbox-relay"), any(LocalDateTime.class), eq(20)))
+                .thenReturn(List.of(event));
         when(priceAlertProducer.send(any(PriceAlertMessage.class))).thenReturn(nackCorrelationData(event.getEventKey()));
 
         outboxRelay.relayPendingEvents();
@@ -104,13 +122,27 @@ class OutboxRelayTest {
     @Test
     void relayMarksEventDeadWhenAttemptsReachMaxAttempts() throws Exception {
         OutboxEvent event = outboxEvent(5, 4, objectMapper.writeValueAsString(priceAlertMessage()));
-        when(outboxEventMapper.selectReadyEvents(any(), any(), eq(20))).thenReturn(List.of(event));
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(outboxEventMapper.selectClaimedReadyEvents(eq("test-outbox-relay"), any(LocalDateTime.class), eq(20)))
+                .thenReturn(List.of(event));
         when(priceAlertProducer.send(any(PriceAlertMessage.class))).thenReturn(nackCorrelationData(event.getEventKey()));
 
         outboxRelay.relayPendingEvents();
 
         verify(outboxEventMapper).markDead(eq(5L), eq(5), any(String.class), any(LocalDateTime.class));
         verify(outboxEventMapper, never()).markRetryable(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void relayDoesNotPublishWhenNoEventsAreClaimedByThisInstance() {
+        when(outboxEventMapper.claimReadyEvents(any(), any(LocalDateTime.class), eq(20), eq("test-outbox-relay"), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        outboxRelay.relayPendingEvents();
+
+        verify(outboxEventMapper, never()).selectClaimedReadyEvents(any(), any(), any(Integer.class));
+        verify(priceAlertProducer, never()).send(any());
     }
 
     private CorrelationData ackCorrelationData(String eventKey) {

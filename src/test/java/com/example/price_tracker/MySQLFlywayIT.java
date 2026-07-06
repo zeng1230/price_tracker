@@ -46,12 +46,20 @@ class MySQLFlywayIT {
         assertThat(tableExists("tb_watchlist")).isTrue();
         assertThat(tableExists("tb_notification")).isTrue();
         assertThat(tableExists("tb_outbox_event")).isTrue();
+        assertThat(tableExists("tb_notification_delivery")).isTrue();
+        assertThat(columnExists("tb_outbox_event", "claim_owner")).isTrue();
+        assertThat(columnExists("tb_outbox_event", "claimed_at")).isTrue();
+        assertThat(columnExists("tb_outbox_event", "claimed_until")).isTrue();
+        assertThat(columnExists("tb_notification_delivery", "claim_owner")).isTrue();
+        assertThat(columnExists("tb_notification_delivery", "claimed_until")).isTrue();
 
         // 3. Verify key indexes exist
         assertThat(indexExists("tb_notification", "ux_notification_event_key")).isTrue();
         assertThat(indexExists("tb_price_history", "idx_price_history_product_captured_at")).isTrue();
         assertThat(indexExists("tb_outbox_event", "ux_outbox_event_key")).isTrue();
         assertThat(indexExists("tb_outbox_event", "idx_outbox_event_status_retry_id")).isTrue();
+        assertThat(indexExists("tb_outbox_event", "idx_outbox_event_claim_ready")).isTrue();
+        assertThat(indexExists("tb_notification_delivery", "idx_notification_delivery_claim_ready")).isTrue();
     }
 
     private boolean tableExists(String tableName) {
@@ -63,6 +71,12 @@ class MySQLFlywayIT {
     private boolean indexExists(String tableName, String indexName) {
         String sql = "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?";
         Integer count = jdbcTemplate.queryForObject(sql, Integer.class, tableName, indexName);
+        return count != null && count > 0;
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        String sql = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, tableName, columnName);
         return count != null && count > 0;
     }
 

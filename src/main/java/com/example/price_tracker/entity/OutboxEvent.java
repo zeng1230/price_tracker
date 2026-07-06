@@ -39,6 +39,15 @@ public class OutboxEvent {
     @TableField("last_error")
     private String lastError;
 
+    @TableField("claim_owner")
+    private String claimOwner;
+
+    @TableField("claimed_at")
+    private LocalDateTime claimedAt;
+
+    @TableField("claimed_until")
+    private LocalDateTime claimedUntil;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 

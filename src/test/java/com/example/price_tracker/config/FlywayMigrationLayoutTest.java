@@ -19,6 +19,7 @@ class FlywayMigrationLayoutTest {
         String v3 = migration("V3__add_notification_event_key.sql");
         String v4 = migration("V4__add_query_indexes.sql");
         String v5 = migration("V5__add_outbox_event.sql");
+        String v6 = migration("V6__add_relay_claim_leases_and_notification_delivery.sql");
 
         assertThat(v1).contains("CREATE TABLE tb_user", "CREATE TABLE tb_notification");
         assertThat(v1).doesNotContain("role VARCHAR(20)", "event_key");
@@ -45,6 +46,16 @@ class FlywayMigrationLayoutTest {
                         "ux_outbox_event_key",
                         "idx_outbox_event_status_retry_id")
                 .doesNotContain("CREATE TABLE tb_notification", "ALTER TABLE tb_notification");
+
+        assertThat(v6)
+                .contains("ALTER TABLE tb_outbox_event",
+                        "claim_owner",
+                        "claimed_at",
+                        "claimed_until",
+                        "CREATE TABLE tb_notification_delivery",
+                        "idx_outbox_event_claim_ready",
+                        "idx_notification_delivery_claim_ready")
+                .doesNotContain("DROP TABLE", "DROP COLUMN");
     }
 
     private static String migration(String fileName) throws IOException {

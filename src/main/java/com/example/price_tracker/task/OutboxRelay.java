@@ -3,6 +3,7 @@ package com.example.price_tracker.task;
 import com.example.price_tracker.entity.OutboxEvent;
 import com.example.price_tracker.entity.OutboxEventStatus;
 import com.example.price_tracker.mapper.OutboxEventMapper;
+import com.example.price_tracker.metrics.PriceTrackerMetrics;
 import com.example.price_tracker.mq.message.PriceAlertMessage;
 import com.example.price_tracker.mq.producer.PriceAlertProducer;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -30,6 +32,7 @@ public class OutboxRelay {
     private final OutboxEventMapper outboxEventMapper;
     private final PriceAlertProducer priceAlertProducer;
     private final ObjectMapper objectMapper;
+    private final PriceTrackerMetrics metrics;
 
     @Value("${outbox.relay.batch-size:20}")
     private int batchSize = 20;
@@ -49,6 +52,11 @@ public class OutboxRelay {
     @Value("${outbox.relay.enabled:true}")
     private boolean relayEnabled = true;
 
+    @Value("${outbox.relay.claim-lease-seconds:120}")
+    private long claimLeaseSeconds = 120;
+
+    private String relayInstanceId = "outbox-relay-" + UUID.randomUUID();
+
     @Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:5000}")
     public void relayScheduledEvents() {
         if (!relayEnabled) {
@@ -59,7 +67,13 @@ public class OutboxRelay {
 
     public void relayPendingEvents() {
         LocalDateTime now = LocalDateTime.now();
-        List<OutboxEvent> events = outboxEventMapper.selectReadyEvents(READY_STATUSES, now, resolveBatchSize());
+        int batchLimit = resolveBatchSize();
+        LocalDateTime claimedUntil = now.plusSeconds(resolveClaimLeaseSeconds());
+        int claimed = outboxEventMapper.claimReadyEvents(READY_STATUSES, now, batchLimit, relayInstanceId, claimedUntil);
+        if (claimed <= 0) {
+            return;
+        }
+        List<OutboxEvent> events = outboxEventMapper.selectClaimedReadyEvents(relayInstanceId, LocalDateTime.now(), batchLimit);
         for (OutboxEvent event : events) {
             relayOne(event);
         }
@@ -67,6 +81,10 @@ public class OutboxRelay {
 
     private int resolveBatchSize() {
         return batchSize > 0 ? batchSize : 20;
+    }
+
+    private long resolveClaimLeaseSeconds() {
+        return claimLeaseSeconds > 0 ? claimLeaseSeconds : 120;
     }
 
     private void relayOne(OutboxEvent event) {
@@ -91,6 +109,7 @@ public class OutboxRelay {
             }
             if (confirm.isAck()) {
                 outboxEventMapper.markSent(event.getId(), LocalDateTime.now());
+                metrics.recordOutboxRelay(PriceTrackerMetrics.RESULT_SUCCESS);
                 log.info("outbox event published, eventKey={}, id={}", eventKey, event.getId());
                 return;
             }
@@ -120,6 +139,7 @@ public class OutboxRelay {
                 nextRetryAt,
                 truncate(error),
                 now);
+        metrics.recordOutboxRelay(PriceTrackerMetrics.RESULT_FAILED);
         log.warn("outbox event publish failed, eventKey={}, id={}, attempts={}, nextRetryAt={}, error={}",
                 event.getEventKey(), event.getId(), nextAttempts, nextRetryAt, error);
     }
@@ -127,6 +147,7 @@ public class OutboxRelay {
     private void markDead(OutboxEvent event, String error) {
         int nextAttempts = normalizeAttempts(event) + 1;
         outboxEventMapper.markDead(event.getId(), nextAttempts, truncate(error), LocalDateTime.now());
+        metrics.recordOutboxRelay("dead");
         log.error("outbox event marked dead, eventKey={}, id={}, attempts={}, error={}",
                 event.getEventKey(), event.getId(), nextAttempts, error);
     }
