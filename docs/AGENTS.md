@@ -1,93 +1,66 @@
 # AGENTS.md
 
-This vault is an AI-native engineering memory for a Java/Spring Boot Amazon Price Tracker project. Prefer engineering decisions over educational summaries.
+此仓库是一个 Java/Spring Boot 价格追踪器 (Price Tracker) 后端。更倾向于立足于当前代码做出直接的工程决策，而不是进行宽泛的教学总结。
 
-## Project Context
+## 当前项目上下文
 
-- Core project: Price Tracker, a Spring Boot backend using MySQL, Redis, RabbitMQ, and scheduled crawling.
-- Current stage: high-concurrency phase is complete; next priority is Integration and delivery.
-- Project positioning: backend engineering system showing cache optimization, async notification, rate limiting, idempotency, retry, and pressure-test reasoning.
+- 该项目是一个 Spring Boot 单体应用，而不是微服务系统。
+- Java 包根路径为 `com.example.price_tracker`。
+- MySQL 是数据真实之源 (Source of truth)。
+- Redis 用于缓存、锁、限流、幂等性以及 JWT 登出黑名单。
+- RabbitMQ 用于单体应用内部的异步通知传递，并提供最少一次 (at-least-once) 语义。
+- Flyway 负责管理 `src/main/resources/db/migration` 下的模式迁移。
+- Docker Compose 启动 MySQL、Redis 和 RabbitMQ。它不运行应用程序容器。
+- 根目录下存在一个用于打包 Spring Boot jar 的 `Dockerfile`。
 
-## Architecture Principles
+## 当前已实现的能力
 
-- MySQL is source of truth. Redis is derived acceleration.
-- RabbitMQ is at-least-once. Consumers must be idempotent.
-- External crawling is unreliable. Use timeout, bounded concurrency, retry budget, and persisted attempt state.
-- Keep business transaction boundaries short. Never hold DB transactions across external HTTP, MQ waits, or Redis operations.
-- Prefer local transaction plus outbox/reconciliation over distributed transactions.
-- Design every async workflow around unknown result, duplicate delivery, and partial failure.
+- 事务性发件箱 (Transactional Outbox) 通过 `tb_outbox_event` 实现。
+- 发件箱的认领/租约 (claim/lease) 通过 `claim_owner`、`claimed_at` 和 `claimed_until` 完成。
+- Webhook 交付通过 `tb_notification_delivery`、`DefaultWebhookDeliveryClient` 和 `NotificationDeliveryRelay` 完成。
+- 存在针对发件箱和通知交付的管理员 DEAD 查询和重试端点。
+- 存在 `SerpApiPriceProvider`，但默认禁用。
+- `MockPriceProvider` 是本地/测试回退方案，不调用外部服务。
+- 已完成 JWT 登出和 Redis 黑名单功能。
+- 已完成 `prod` 配置文件的敏感配置校验。
+- 通过 Actuator 和 Micrometer 注册表支持 Prometheus 端点能力。
 
-## Project Structure Expectations
+## 成熟度边界
 
-- Controller: HTTP validation and response mapping only.
-- Service: business decisions, transaction boundaries, invariant enforcement.
-- Repository: persistence queries and schema-facing access.
-- Cache: key design, TTL, invalidation, penetration/breakdown protection.
-- MQ producer/consumer: payload contract, idempotency key, ack/retry/DLQ behavior.
-- Scheduler/crawler: bounded work creation, timeout, retry, progress persistence.
+当前项目是一个 release-candidate 骨架，正在逐步接近可验证的发布候选版本 (release candidate)。它仍不能被称为达到了商用生产就绪 (production-ready) 标准。
 
-## Engineering Constraints
+不要声称系统具备以下能力：
 
-- Every high-frequency read path needs a cache/index strategy.
-- Every state mutation needs a business invariant and failure semantics.
-- Every MQ side effect needs durable idempotency protection.
-- Every crawler path needs timeout, rate limit, and retry classification.
-- Every cache change must name source of truth and invalidation rule.
-- Every concurrency feature must name pool/queue limits and backpressure behavior.
+- 高可用部署
+- 多区域灾难恢复
+- 完整的微服务架构
+- Kafka 事件流平台
+- 完整的 OpenTelemetry 追踪
+- Grafana 生产告警平台
+- 多平台真实价格爬取
+- 完整的后端/前端仪表盘 (Dashboard)
+- SLA 或 SLO 保证
 
-## Testing Philosophy
+## 下一步优先级
 
-- Tests are executable architecture contracts.
-- Unit tests: pure business rules, validation, idempotency key generation.
-- Integration tests: MySQL queries, transaction boundaries, Redis cache behavior, RabbitMQ consumer behavior.
-- End-to-end tests: product watch -> crawl/price update -> notification intent -> async send.
-- Performance tests must state dataset, concurrency, bottleneck, and acceptance threshold.
+1. 运行并记录 `docs/RELEASE_CANDIDATE_ACCEPTANCE.md` 中的完整端到端 (E2E) 验收路径。
+2. 测量 `docs/PERFORMANCE_BASELINE.md` 中的最低性能与容量基线。
+3. 验证类似于生产环境的部署行为，包括生产配置防线、`/actuator/prometheus`、Docker 镜像构建、RabbitMQ 中继行为以及 Webhook HMAC 交付。
 
-## Distributed System Considerations
+## 工程原则
 
-- Timeout means result unknown.
-- Retry only safe operations or operations guarded by idempotency/version constraints.
-- Use durable workflow state for recovery; logs are not recovery state.
-- Queue lag, retry count, DLQ count, cache hit ratio, and crawl success rate are required operational signals.
-- Strong consistency is scoped to business invariants; stale reads are acceptable only when documented.
+- 除非用户明确要求进行独立的架构迁移，否则请保持单体应用边界的清晰性。
+- 保持业务事务简短。不要在外部 HTTP、MQ 等待或 Redis 操作期间持有数据库事务。
+- 将 RabbitMQ 视为最少一次 (at-least-once)。消费者和下游的副作用必须保持幂等。
+- 使用持久的数据库状态进行恢复。日志不是恢复状态。
+- 尽可能使用唯一约束来保证所有权 and 幂等性。
+- 除非用户明确批准，否则避免引入新的中间件。
+- 不要将真实的 API 密钥或密钥添加到仓库中。
+- 除非任务明确要求修改模式，否则不要修改迁移文件。
 
-## Database Design Principles
+## 文档规则
 
-- Unique constraints enforce idempotency and ownership rules.
-- Use append-only price history unless a correction workflow is explicit.
-- Composite indexes must match real query shape.
-- Avoid unnecessary indexes; each one increases write cost.
-- Validate important SQL with realistic data and `EXPLAIN`.
-
-## Concurrency Principles
-
-- Bound thread pools, queues, connection pools, retry loops, and external calls.
-- Do not hold locks while doing network I/O.
-- Prefer partitioned ownership over global locks.
-- Use DB constraints/versioning for race protection.
-- Consumer concurrency must match DB capacity and idempotency guarantees.
-
-## Preferred Coding Patterns
-
-- Constructor injection.
-- Typed request/response DTOs and message payloads.
-- Explicit `BigDecimal` price handling with currency/scale rules.
-- Transaction annotations at service-layer business boundaries.
-- Explicit cache key builders and idempotency-key builders.
-- Small modules with clear reasons to change.
-
-## Anti-Patterns
-
-- Treating Redis as authoritative state.
-- Assuming RabbitMQ delivers exactly once.
-- Publishing messages before durable DB state exists.
-- Holding DB transactions during crawler calls.
-- Global distributed locks for scheduler convenience.
-- Infinite retries without DLQ and operator visibility.
-- SQL that hides indexed columns behind unnecessary expressions.
-- Documentation that explains lectures instead of project decisions.
-
-## Knowledge Routing
-
-- Read `engineering-knowledge/project-decisions/knowledge-routing.md` before asking Codex for project-specific context.
-- Read the smallest relevant rule file instead of loading raw course notes by default.
+- 保持 README、API 契约、操作手册 (runbook) 以及发布候选版本验收文档与代码同步。
+- 不要将未来的生产就绪声明写成当前已实现的能力。
+- If a capability is implemented but not operationally verified, state that it is implemented and still requires acceptance evidence. (如果某项能力已实现但尚未在运行中验证，应说明其已实现，但仍需要验收证据。)
+- 如果尚未测量性能数据，请填写 `pending measurement` 或 `待实测`；切勿凭空编造结果。
