@@ -1,9 +1,5 @@
 # 价格追踪器 (Price Tracker)
 
-价格追踪器 (Price Tracker) 是一个用于商品价格监控的 Spring Boot 3 单体后端应用。它不是一个微服务系统。Java 包的根路径为 `com.example.price_tracker`。
-
-当前项目处于 **release-candidate 骨架**阶段，正在逐步演进为可验证的发布候选版本 (Release Candidate)。它具有持久的异步通知底座、本地中间件集成以及生产环境 profile 配置防线，但目前它还不是一个小规模的真实生产服务。
-
 ## 当前能力
 
 - 以后端 MySQL、Redis 和 RabbitMQ 为支撑的 Spring Boot 单体 REST API。
@@ -257,20 +253,3 @@ docker build -t price-tracker:local .
 - [docs/RUNBOOK.md](docs/RUNBOOK.md)
 - [docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md)
 - [docs/production_readiness_analysis.md](docs/production_readiness_analysis.md)
-
-## 当前边界
-
-切勿声称当前项目已提供：
-
-- 商用级生产就绪
-- 高可用部署能力
-- 多地域容灾恢复能力
-- 完整的微服务架构
-- Kafka 事件流平台
-- 完整的 OpenTelemetry 分布式链路追踪
-- Grafana 生产报警平台
-- 多平台真实商品价格爬取
-- 完整的前端控制台 Dashboard
-- SLA 或 SLO 保障
-
-推荐的下一步工作是运行完整的 E2E 验收路径，捕获经过测量的性能基线，并使用真实环境的配置项来验证部署及运行时行为。
